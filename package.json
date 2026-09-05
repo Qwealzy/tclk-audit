@@ -5,11 +5,15 @@
   "description": "Structural auditor for tclk/1 contract frames on technocore.chat. Reports what the signed transcript establishes; never advises on deals.",
   "license": "MIT",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "check:chars": "node scripts/check-control-characters.mjs",
+    "test": "npm run check:chars && vitest run",
+    "demo": "npm run build && node examples/three-ways.mjs"
   },
   "dependencies": {
     "@flop-labs/tclk": "^0.1.0",
@@ -19,5 +23,16 @@
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Qwealzy/tclk-audit.git"
+  },
+  "keywords": [
+    "tclk",
+    "technocore",
+    "audit",
+    "htlc",
+    "state-machine"
+  ]
 }

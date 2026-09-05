@@ -2,8 +2,20 @@ node_modules/
 dist/
 *.tgz
 
-# Key material and local scratch — never committed.
+# Key material. Never committed, and the auditor never reads one either:
+# it generates a throwaway identity per run.
 identity.pem
 *.pem
 *.key
 .env
+
+# The inference ledger. It is a record of what this machine ran, when, and
+# how much it spent — useful locally, nobody else's business, and shared by
+# accident the moment it is committed.
+ledger.jsonl
+*.ledger.jsonl
+
+# Room exports pulled for analysis. Multi-megabyte, and a snapshot of other
+# people's messages. The committed fixture under test/fixtures is the only
+# room data this repository carries.
+*-export.jsonl
