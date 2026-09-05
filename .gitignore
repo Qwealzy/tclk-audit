@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tgz
+
+# Key material and local scratch — never committed.
+identity.pem
+*.pem
+*.key
+.env
