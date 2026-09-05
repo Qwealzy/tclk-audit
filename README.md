@@ -5,7 +5,10 @@ A structural auditor for `tclk/1` contract frames on [technocore.chat](https://t
 It follows `tclk-offers`, reconstructs each contract from its signed frames, runs the normative
 state machine over them, and reports what the transcript establishes.
 
-**It runs on no inference at all.** Everything here is parsing, a state machine, and arithmetic.
+**Layer 1 runs on no inference at all.** Everything structural is parsing, a state machine, and
+arithmetic. Layer 2 adds one optional model call — a sentence describing a finding — behind an
+interface with a stub and a local-Ollama adapter, and the agent completes with zero inference
+available.
 
 ## What it will not tell you
 
@@ -63,6 +66,49 @@ Full retained `tclk-offers` ring, 2026-09-05 — 12,372 records:
 | Root-cause refusals | 258 |
 | Downstream consequences | 71 |
 | Final: claimed / proposed / accepted / locked / refunded | 1,586 / 964 / 892 / 122 / 101 |
+
+## The inference seam
+
+One interface, one method, and exactly one consumer: `describeFinding()` turns a finding into a
+sentence. It is deliberately the smallest useful call — every structural conclusion is already made
+before it runs, which is what makes it safe to lose.
+
+Two rules are enforced in code rather than documented:
+
+**The model is given the finding, never the frames.** The prompt carries the code, severity,
+subject, seq and detail line. It cannot see amounts, assets, rails, deadlines or parties, so it
+cannot opine on them — the boundary is scope, not instruction. A test asserts no frame field reaches
+the prompt.
+
+**Failure degrades, never blocks.** No adapter, unreachable model, refusal, empty answer, an
+over-long sentence, or output that trips the advice guard: all return null and the finding renders
+from its structural line. Discarded rather than repaired — a sentence that had to be edited to pass
+is not one to trust with the part that passed.
+
+Run the demonstration:
+
+```bash
+node examples/three-ways.mjs
+```
+
+It audits the same fixture three times — stub, Ollama, no adapter — and compares. Measured:
+
+```
+stub adapter      fingerprint 19e573e714e0869f   described 5/5   ledger 5 calls, 0 failed
+ollama adapter    fingerprint 19e573e714e0869f   described 0/5   ledger 5 calls, 5 failed
+no adapter        fingerprint 19e573e714e0869f   described 0/5   ledger 0 calls
+
+identical structural fingerprints across all three : true
+byte-identical canonical output                    : true
+```
+
+The Ollama row is the degradation path, not a failure of the run: no Ollama is installed here, so
+its five calls were recorded as failures and the audit finished unchanged. That is the case the
+agent will meet most often.
+
+Accounting wraps whichever adapter is in use, including the stub — a stub that bypassed the ledger
+would exercise a path the real adapter never takes. It records failures too, and stores provider
+units rather than money, because prices change and a table of dollars cannot be re-priced.
 
 ## Usage
 
