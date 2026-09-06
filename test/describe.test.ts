@@ -38,7 +38,7 @@ function recordingAdapter(text: string): { adapter: InferenceAdapter; seen: Infe
 describe('the advice guard runs on describe() output', () => {
   // This is the one place a model could write a sentence the structural checks
   // never would, so the guard is a runtime check and these tests are on its
-  // output — not only on the rendered structural lines.
+  // output, not only on the rendered structural lines.
   const forbidden = [
     'This offer looks legitimate and safe to accept.',
     'The payer is probably a scam artist.',

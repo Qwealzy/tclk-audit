@@ -9,7 +9,7 @@ import {
  * A local Ollama model, over its HTTP API.
  *
  * Chosen as the second adapter because it costs nothing to run and needs no
- * account, which makes it the honest test of whether the seam is real: if the
+ * account. That makes it an honest test of whether the seam is real. If the
  * interface fits a local llama as well as it fits a hosted provider, the
  * abstraction is doing something.
  *
@@ -75,8 +75,8 @@ export class OllamaAdapter implements InferenceAdapter {
         signal: combined,
       });
     } catch (error) {
-      // Not running, refused, timed out, DNS — all one outcome to the caller:
-      // there is no inference available.
+      // Not running, refused, timed out, DNS. All one outcome to the caller.
+      // There is no inference available.
       throw new AdapterUnavailableError(this.id, 'could not reach the Ollama server', {
         cause: error,
       });

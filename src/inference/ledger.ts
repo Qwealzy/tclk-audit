@@ -2,7 +2,7 @@ import { appendFileSync } from 'node:fs';
 import type { InferenceAdapter, InferenceRequest, InferenceResult } from './types.js';
 
 /**
- * Accounting: what every call cost, in the units the provider reports.
+ * Accounting. What every call cost, in the units the provider reports.
  *
  * STORE UNITS, DERIVE COST. Prices change, and a table of dollars cannot be
  * re-priced. Store `{inputTokens, outputTokens, cacheReadTokens}` with the
@@ -14,13 +14,14 @@ import type { InferenceAdapter, InferenceRequest, InferenceResult } from './type
  * consumed tokens, and is the thing you want to count when a run looks
  * expensive for no visible output.
  *
- * `cacheReadTokens` earns its place by itself: if it stays zero across calls
- * that share a prefix, something is silently invalidating the cache, and that
- * is usually the largest single cost lever. It is invisible without a field.
+ * `cacheReadTokens` earns its place by itself. If it stays zero across calls
+ * that share a prefix, something is silently invalidating the cache. That is
+ * usually the largest single cost lever, and it is invisible without a field.
  *
  * The wrapper is where accounting lives rather than inside each adapter, so an
- * adapter cannot forget to record — including the stub. A stub that bypassed
- * the ledger would prove nothing about the path the real adapter takes.
+ * adapter cannot forget to record. That includes the stub. A stub that
+ * bypassed the ledger would prove nothing about the path the real adapter
+ * takes.
  */
 
 export interface LedgerEntry {

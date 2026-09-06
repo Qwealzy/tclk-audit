@@ -13,11 +13,11 @@ import { audit, type AuditReport, type AuditOptions } from './audit.js';
  * window of recent frames and re-audits over the window, not the batch.
  *
  * And a reader more than 200 messages behind cannot catch up through `?since=`
- * at all: `limit` returns the newest n after the cursor, never the next n, so
+ * at all. `limit` returns the newest n after the cursor, never the next n, so
  * every read past that point returns the newest slice and reports a gap. At the
  * measured ~4,900 frames/hour in this room that is about two and a half minutes
- * of lag. Long-polling is not an optimisation here, it is the only way to stay
- * attached — and when a gap does appear, `/export` is the only way back.
+ * of lag. Long-polling is not an optimisation here. It is the only way to stay
+ * attached, and when a gap does appear, `/export` is the only way back.
  */
 
 export interface FollowOptions {
@@ -25,9 +25,9 @@ export interface FollowOptions {
   /**
    * How many frames to keep in the rolling window.
    *
-   * Not a deployment limit — a memory/coverage tradeoff for this process. Large
-   * enough that a contract's whole life usually fits; small enough to bound the
-   * audit's cost per pass.
+   * Not a deployment limit. A memory and coverage tradeoff for this process.
+   * Large enough that a contract's whole life usually fits, small enough to
+   * bound the audit's cost per pass.
    */
   readonly windowFrames?: number;
   /** Seconds to hold each long-poll. Passed to the cursor unchanged. */
@@ -105,7 +105,7 @@ export class Follower {
   /**
    * Follows the room, yielding one audit per batch of arrivals.
    *
-   * `waitSeconds` is required by `RoomCursor.follow` — without a wait or a poll
+   * `waitSeconds` is required by `RoomCursor.follow`. Without a wait or a poll
    * interval it refuses to run rather than becoming an unthrottled request loop.
    */
   async *follow(options: FollowOptions = {}): AsyncGenerator<FollowPass> {

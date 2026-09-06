@@ -14,8 +14,8 @@
  *
  * It earns its place here twice over. This repository carries a fixture of real
  * room messages, and the protocol it audits runs on a server that replaces every
- * invisible character with a space before storage — so a stray one in a test or
- * a fixture would be indistinguishable from the thing being tested.
+ * invisible character with a space before storage. A stray one in a test or a
+ * fixture would be indistinguishable from the thing being tested.
  *
  * Allowed: tab, newline, and carriage return as the first half of a CRLF pair,
  * so a Windows checkout with core.autocrlf=true passes.

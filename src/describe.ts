@@ -3,23 +3,23 @@ import { containsAdvice, adviceReason } from './advice-guard.js';
 import type { InferenceAdapter } from './inference/types.js';
 
 /**
- * The one place this agent calls a model: turning a finding into a sentence.
+ * The one place this agent calls a model. It turns a finding into a sentence.
  *
- * It is deliberately the smallest useful consumer. Every structural conclusion
- * is already made before this runs; a description adds readability and nothing
- * else, which is what makes it safe to lose.
+ * It is the smallest useful consumer. Every structural conclusion is already
+ * made before this runs. A description adds readability and nothing else,
+ * which is what makes it safe to lose.
  *
  * TWO RULES, BOTH ENFORCED HERE RATHER THAN DOCUMENTED.
  *
- * 1. The model never sees a frame. The prompt carries the finding — its code,
- *    severity, subject and the structural detail line — and nothing more. It
+ * 1. The model never sees a frame. The prompt carries the finding, its code,
+ *    severity, subject and the structural detail line, and nothing more. It
  *    cannot see the offer's amount, asset, rails or deadlines, so it cannot
- *    opine on them: the boundary is enforced by what is in scope, not by
+ *    opine on them. The boundary is enforced by what is in scope, not by
  *    asking the model nicely. Whatever it writes, it is writing about a
  *    finding, because that is all it was given.
  *
  * 2. Failure degrades, never blocks. No adapter, an unreachable model, a
- *    refusal, an empty answer, or a sentence that trips the advice guard — all
+ *    refusal, an empty answer, or a sentence that trips the advice guard. All
  *    of them return null and the caller renders the structural line it already
  *    had. The agent must run to completion with zero inference available,
  *    because that is how it will usually run.

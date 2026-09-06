@@ -11,20 +11,20 @@ import type { AuditReport, Finding, Severity } from './audit.js';
  *
  * Three constraints from the venue decide the shape of everything here.
  *
- * **A message is one line and 4096 characters.** A report is not; it is
+ * **A message is one line and 4096 characters.** A report is not. It is
  * summarised into lines, and a line that would not fit is dropped rather than
  * truncated into something that reads as a different claim.
  *
  * **The duplicate filter counts copies, not senders.** An auditor is the worst
- * case for it: findings repeat by nature, and the same summary line posted twice
- * inside the window is refused with a 422 — from any identity, including a
+ * case for it. Findings repeat by nature, and the same summary line posted twice
+ * inside the window is refused with a 422, from any identity, including a
  * first-ever post. So each line carries the window it describes, which makes
  * consecutive summaries genuinely different text rather than the same sentence
  * resent. STATED: waiting does not fix a 422; only different bytes do.
  *
  * **Nothing is retried.** A 422 means these bytes will be refused again. A 429
  * means wait and resend the same bytes. A 403 means the lane is wrong. Three
- * refusals, three recoveries, none of them automatic — the caller decides.
+ * refusals, three recoveries, none of them automatic. The caller decides.
  */
 
 export interface PublishOptions {
@@ -56,9 +56,9 @@ const SEVERITY_ORDER: Record<Severity, number> = { info: 0, notice: 1, anomaly: 
 /**
  * Renders a report as single-line summaries.
  *
- * Deliberately terse and factual. Every line states what the transcript shows;
- * none of them says whether a deal is sound, because this auditor cannot know
- * that and the frames are not evidence that money moved.
+ * Terse and factual. Every line states what the transcript shows. None of them
+ * says whether a deal is sound, because this auditor cannot know that and the
+ * frames are not evidence that money moved.
  */
 export function renderFindings(report: AuditReport, minSeverity: Severity = 'anomaly'): string[] {
   const threshold = SEVERITY_ORDER[minSeverity];
@@ -87,7 +87,7 @@ export function renderFindings(report: AuditReport, minSeverity: Severity = 'ano
 
   for (const [, { count, example }] of grouped) {
     lines.push(
-      `tclk-audit ${window}: ${example.code} x${count} — ${example.detail}` +
+      `tclk-audit ${window}: ${example.code} x${count}, ${example.detail}` +
         (example.seq === null ? '' : ` (first at seq ${example.seq})`),
     );
   }
@@ -98,7 +98,7 @@ export function renderFindings(report: AuditReport, minSeverity: Severity = 'ano
 /**
  * Signs and posts each line, reporting what happened to every one.
  *
- * Never retries. Never aborts the batch on a refusal either — a 422 on one line
+ * Never retries. Never aborts the batch on a refusal either. A 422 on one line
  * says nothing about the next, which carries different bytes.
  */
 export async function publishFindings(
@@ -131,7 +131,7 @@ export async function publishFindings(
     } catch (error) {
       if (error instanceof DuplicateRefusedError) {
         // STATED: the filter counts copies, not senders. This is not evidence
-        // that an earlier identical line of ours landed — it may well be
+        // that an earlier identical line of ours landed. It may well be
         // another agent's text entirely.
         outcomes.push({ kind: 'duplicate', line, body: error.body });
       } else if (error instanceof RateLimitedError) {
@@ -153,7 +153,7 @@ export async function publishFindings(
  * A strictly increasing nonce.
  *
  * STATED [SIGNING]: a nonce must be greater than the last one that key used in
- * that room, and a millisecond clock is an acceptable source — but a bare
+ * that room, and a millisecond clock is an acceptable source. A bare
  * `Date.now()` is not, because two writes inside the same millisecond produce
  * equal nonces and the second is refused. Seeding from the clock and counting
  * up keeps the ordering without the resolution limit.

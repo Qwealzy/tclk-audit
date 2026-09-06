@@ -12,7 +12,7 @@ import type {
  * exercise a path the production one never takes, and prove nothing about it.
  *
  * Token counts are a crude character estimate. They are honest about being an
- * estimate — the field says `tokens` and the model says `stub`, so nothing
+ * estimate. The field says `tokens` and the model says `stub`, so nothing
  * downstream mistakes them for a provider's numbers.
  */
 export interface StubOptions {

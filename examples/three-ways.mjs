@@ -1,13 +1,13 @@
 /**
  * The seam demonstration.
  *
- * Runs the identical fixture three times — stub, Ollama, no adapter — and
- * compares the findings. If the abstraction is real, the structural output is
- * byte-identical across all three and the only difference is whether a
- * description sentence is attached.
+ * Runs the identical fixture three times, with the stub, with Ollama, and with
+ * no adapter, then compares the findings. If the abstraction is real, the
+ * structural output is byte-identical across all three. The only difference is
+ * whether a description sentence is attached.
  *
- * This is the demonstration, not a unit test: a test asserting equality would
- * pass without anyone seeing that the findings really are the same.
+ * A test asserting equality would pass without anyone seeing that the findings
+ * really are the same. This is a demonstration so you can see it.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -37,7 +37,7 @@ function runAudit() {
   return audit(buildThreads(scan.frames), scan.rejections, { nowMs: NOW });
 }
 
-/** The structural output, with descriptions deliberately excluded. */
+/** The structural output. Descriptions are excluded from it. */
 function fingerprint(report) {
   const canonical = JSON.stringify({
     window: [String(report.windowFirstSeq), String(report.windowLastSeq)],
@@ -115,5 +115,5 @@ console.log('  descriptions attached, per run                     :',
   runs.map((r) => `${r.label.split(' ')[0]}=${r.described.filter((d) => d.text !== null).length}`).join(' '));
 console.log('\n  ' + (same
   ? 'The only thing that varies is the sentence. The audit does not depend on inference.'
-  : 'FINGERPRINTS DIVERGED — inference is leaking into the structural output.'));
+  : 'FINGERPRINTS DIVERGED. Inference is leaking into the structural output.'));
 process.exit(same ? 0 : 1);

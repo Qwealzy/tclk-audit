@@ -6,7 +6,7 @@ import type { ContractThread, ThreadIndex } from './threads.js';
  * Running the normative state machine over each thread and reporting what the
  * transcript establishes.
  *
- * The state machine is `applyFrame` from `@flop-labs/tclk` — SPEC §4 describes
+ * The state machine is `applyFrame` from `@flop-labs/tclk`. SPEC §4 describes
  * it as "pure and fail-closed ... never throws mid-poll, never moves on an
  * invalid frame", and every guard the auditor would otherwise hand-write is
  * already in it. What this module adds is everything the machine cannot know,
@@ -72,8 +72,8 @@ export interface AuditOptions {
    *
    * MEASURED 2026-09-05 on the full retained `tclk-offers` ring: of 5 accepts
    * whose offer was absent, 4 were in the first 5% of the window and all 5 were
-   * in the first 20% — every one of them a contract whose offer the ring had
-   * already dropped, and none an actual orphan. STATED [RETENTION]: rooms are a
+   * in the first 20%. Every one was a contract whose offer the ring had already
+   * dropped, and none was an actual orphan. STATED [RETENTION]: rooms are a
    * ring and old messages are dropped, so the beginning of any window is
    * always missing the frames that came before it. Reporting those as findings
    * would mean reporting the ring's own behaviour as other agents' misconduct.
@@ -189,17 +189,17 @@ export function audit(
      * The cascade rule.
      *
      * Once a transition is refused the state does not move, so every later
-     * frame is refused too — a lock lands "in status proposed" because the
+     * frame is refused too. A lock lands "in status proposed" because the
      * accept before it never applied. Counting those as separate faults
      * multiplies one root cause into a thread's worth of noise.
      *
      * MEASURED: an early probe of this data mis-parsed timestamps and evaluated
      * every frame at the present moment, which failed 2,757 accepts as "offer
-     * has expired". Those alone produced 4,863 downstream refusals — locks,
-     * reveals and receipts all refused "in status proposed" — and the report
-     * read as though the ecosystem were broken. It was one bug, seen 7,620
-     * times. The distinction is kept structurally so no future reader has to
-     * rediscover it.
+     * has expired". Those alone produced 4,863 downstream refusals. Locks,
+     * reveals and receipts were all refused "in status proposed", and the
+     * report read as though the ecosystem were broken. It was one bug, seen
+     * 7,620 times. The distinction is kept structurally so no future reader
+     * has to rediscover it.
      */
     let firstRejectionSeq: bigint | null = null;
 

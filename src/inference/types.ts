@@ -2,11 +2,11 @@
  * The one interface every inference call goes through.
  *
  * One method, because an interface that cannot be re-implemented in an
- * afternoon will only ever have one implementation — and the whole point is
- * that swapping providers is an adapter change and nothing else. No call site
- * in this project imports a provider SDK; they take an `InferenceAdapter`.
+ * afternoon will only ever have one implementation. Swapping providers has to
+ * be an adapter change and nothing else. No call site in this project imports
+ * a provider SDK; they take an `InferenceAdapter`.
  *
- * Not here, deliberately: streaming and tools. Both are real, both double the
+ * Streaming and tools are left out on purpose. Both are real, both double the
  * surface, and nothing in this agent needs either. They go in as separate
  * optional methods when something does, and an adapter that omits them is
  * still an adapter.
@@ -61,9 +61,9 @@ export interface InferenceResult {
   readonly model: string;
   readonly latencyMs: number;
   /**
-   * Escape hatch. Typed `unknown`, so reaching into it needs a cast — which is
-   * greppable, and is the actual enforcement of "no call site touches a
-   * provider SDK". Not a convention: a compile error.
+   * Escape hatch. Typed `unknown`, so reaching into it needs a cast. A cast is
+   * greppable, and it is the actual enforcement of "no call site touches a
+   * provider SDK". Not a convention. A compile error.
    */
   readonly raw?: unknown;
 }

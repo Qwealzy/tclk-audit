@@ -7,22 +7,22 @@ import { isTclkLine, tryDecodeFrame, decodeFrame, type TclkFrame } from '@flop-l
  *
  * `@flop-labs/tclk` is the normative implementation: SPEC.md says the field
  * tables are "generated from schema/tclk1-frames.schema.json, the same artifact
- * the decoder uses", and that decoding is fail-closed — "a known frame type with
- * an unknown key, a missing field, or a malformed value is rejected, never
- * coerced". A second decoder written from the prose would be a second thing to
- * keep in step, and the first place the two disagreed is the place this auditor
- * would start reporting fiction.
+ * the decoder uses", and that decoding is fail-closed, quoting "a known frame
+ * type with an unknown key, a missing field, or a malformed value is rejected,
+ * never coerced". A second decoder written from the prose would be a second
+ * thing to keep in step, and the first place the two disagreed is the place
+ * this auditor would start reporting fiction.
  *
- * So this module does the part the library cannot: it turns a room message into
+ * So this module does the part the library cannot. It turns a room message into
  * an auditable record, keeping the transport facts (seq, ts, sender, whether the
  * record is re-verifiable) beside the decoded frame.
  *
  * MEASURED 2026-09-05 against the full retained `tclk-offers` ring, 12,372
  * records: 12,149 frames decoded, 141 lines were not tclk at all, and 82 were
- * rejected — every rejection a schema violation the spec requires
+ * rejected. Every rejection is a schema violation the spec requires
  * (`unknown field on offer: contractId`, `missing field on accept: nonce`,
  * `claimByMs must be strictly before refundAfterMs`). The decoder handles live
- * traffic; the rejections are the fail-closed rule working.
+ * traffic, and the rejections are the fail-closed rule working.
  */
 
 /** One room message that carried a frame, with the transport facts kept. */
@@ -46,7 +46,7 @@ export interface FrameRecord {
    * Whether the record carries a signature and can be re-verified offline.
    *
    * STATED [RENDERING]: a missing `sig` means "not re-verifiable", NOT
-   * "invalid" — records written before the field existed do not have one.
+   * "invalid". Records written before the field existed do not have one.
    * STATED [patterns.md §6]: "An unsigned frame is data, not a commitment —
    * readers drop it." This auditor records the distinction rather than
    * silently trusting either.
@@ -59,7 +59,7 @@ export interface FrameRejection {
   readonly seq: bigint;
   readonly ts: string;
   readonly from: string;
-  /** The decoder's own message. Never reworded — it names the exact field. */
+  /** The decoder's own message. Never reworded. It names the exact field. */
   readonly reason: string;
 }
 
@@ -82,12 +82,12 @@ export interface RoomRecord {
 /**
  * Parses a server timestamp.
  *
- * The server serves `2026-09-05T17:02:16.263436Z` — microsecond precision, and
+ * The server serves `2026-09-05T17:02:16.263436Z`, microsecond precision and
  * already carrying the `Z`. Appending another one yields NaN, which a
  * `|| Date.now()` fallback then hides by silently evaluating every frame at the
  * present moment. That mistake made 94% of all transitions fail as "offer has
  * expired" in an early probe of this data, and it looked like a finding about
- * the ecosystem rather than a bug in the reader. Hence: no fallback. An
+ * the ecosystem rather than a bug in the reader. So there is no fallback. An
  * unparseable timestamp is returned as NaN and the caller must decide.
  */
 export function parseServerTimestamp(ts: string): number {

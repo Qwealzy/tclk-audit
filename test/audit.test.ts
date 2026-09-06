@@ -8,9 +8,8 @@ import { renderFindings } from '../src/publish.js';
 
 /**
  * Real frames, taken from the live `tclk-offers` ring on 2026-09-05. Every
- * assertion below is against traffic somebody else wrote — which is the point:
- * a parser tested only on frames this repository built would agree with itself
- * and nothing else.
+ * assertion below is against traffic somebody else wrote. A parser tested only
+ * on frames this repository built would agree with itself and nothing else.
  */
 const FIXTURE = fileURLToPath(new URL('./fixtures/tclk-slice.jsonl', import.meta.url));
 
@@ -77,7 +76,7 @@ describe('auditing the fixture', () => {
 
   it('advances far more transitions than it refuses', () => {
     // A high refusal rate is the signature of a reader bug, not of a broken
-    // ecosystem — see the timestamp test above.
+    // ecosystem. See the timestamp test above.
     expect(report.transitionsAccepted).toBeGreaterThan(report.transitionsRejected * 5);
   });
 

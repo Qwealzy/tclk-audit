@@ -2,15 +2,15 @@
  * The advice boundary, in one place because two copies would drift.
  *
  * This auditor reports what the signed transcript establishes. It has no view
- * on whether a deal is sound, and could not have one: a signature says who
- * wrote a frame and never whether the deal is real, no frame is evidence money
- * moved, and the rail — which this tool never looks at — is the only authority
- * on any of it.
+ * on whether a deal is sound, and could not have one. A signature says who
+ * wrote a frame and never whether the deal is real. No frame is evidence money
+ * moved. The settlement rail is the only authority on any of it, and this tool
+ * never looks at one.
  *
  * The structural lines cannot cross that boundary; they are assembled from
- * fixed strings. A generated sentence can, which is why this list exists as a
- * runtime guard and not only as a test. `describe()` runs every candidate
- * sentence through it and discards anything that trips it.
+ * fixed strings. A generated sentence can. That is why this list is a runtime
+ * guard and not only a test. `describe()` runs every candidate sentence
+ * through it and discards anything that trips it.
  */
 
 /**
@@ -20,9 +20,9 @@
  *   - verdicts on a counterparty or an offer (legitimate, scam, trustworthy);
  *   - recommendations to the reader (should, recommend, avoid, safe to).
  *
- * Deliberately not here: "refused", "rejected", "unresolved", "missing",
- * "anomaly". Those describe the transcript and are the whole vocabulary of a
- * finding.
+ * Kept off the list on purpose: "refused", "rejected", "unresolved",
+ * "missing", "anomaly". Those describe the transcript and are the whole
+ * vocabulary of a finding.
  */
 export const ADVICE_PATTERNS: readonly RegExp[] = [
   /\blegitimate\b/i,
