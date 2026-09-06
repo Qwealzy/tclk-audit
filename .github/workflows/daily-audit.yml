@@ -1,0 +1,101 @@
+name: Daily audit
+
+# Once a day: export the retained tclk-offers ring, run the structural checks,
+# and commit the findings file. The history accumulates into a public record.
+#
+# NO KEY IS PRESENT IN THIS WORKFLOW.
+#
+# A did:key is single-copy and cannot be revoked. There is no issuer, no
+# registry, and no rotation. A key in Actions secrets would sign on someone's
+# behalf inside an environment they cannot fully see, permanently. So this
+# workflow produces unsigned findings, every file says so on its first line,
+# and signed summaries are published by hand from the machine that holds the
+# key.
+#
+# The no-signing step below greps for it rather than trusting this comment.
+
+on:
+  schedule:
+    # 06:20 UTC. Off the hour on purpose. Every cron job on the platform fires
+    # at the top of the hour, and this one has no reason to join that queue.
+    - cron: '20 6 * * *'
+  workflow_dispatch:
+
+# Only one run at a time. Two overlapping runs would race on the push.
+concurrency:
+  group: daily-audit
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # The scheduled path must not be able to sign anything. If someone later
+      # adds an Identity import to the runner, this step fails. Without it, CI
+      # could quietly start signing.
+      - name: No signing in the scheduled path
+        run: |
+          # Comment lines are stripped first. The runner's own header explains
+          # that it does not sign, and a gate that trips on the sentence
+          # describing it is a gate nobody keeps.
+          if grep -vE "^\s*(\*|//|/\*)" scripts/scheduled-audit.mjs \
+             | grep -nE "\bIdentity\b|signMessage|signNote|loadPem|fromPem|fromSeed|\.pem\b"; then
+            echo "::error::the scheduled runner references signing; CI must never hold a key"
+            exit 1
+          fi
+          echo "scheduled runner contains no signing path"
+
+      - run: npm run check:chars
+
+      - run: npm run typecheck
+
+      - run: npx vitest run
+
+      - run: npm run build
+
+      # One read against the service. /export returns the whole retained ring.
+      # Paging with ?since= does not work from cold. limit returns the newest n
+      # after the cursor, capped at 200, so a job starting with no cursor can
+      # never catch up.
+      - name: Audit the retained ring
+        run: node scripts/scheduled-audit.mjs
+
+      - name: Commit the findings
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Only the findings directory. Anything else being dirty is a bug in
+          # the run, and should not be swept into a data commit.
+          if [ -n "$(git status --porcelain -- . ':!findings')" ]; then
+            echo "::error::the working tree is dirty outside findings/"
+            git status --porcelain
+            exit 1
+          fi
+
+          git add findings/
+          if git diff --cached --quiet; then
+            echo "no change in the findings for today; nothing to commit"
+            exit 0
+          fi
+
+          git commit -m "findings: ${{ github.run_started_at }} audit of tclk-offers
+
+          Unsigned, produced by the daily scheduled run. One sample of the
+          retained ring. Not a complete record of the day."
+          git push

@@ -10,7 +10,7 @@ identity.pem
 .env
 
 # The inference ledger. It is a record of what this machine ran, when, and
-# how much it spent — useful locally, nobody else's business, and shared by
+# how much it spent. Useful locally, nobody else's business, and shared by
 # accident the moment it is committed.
 ledger.jsonl
 *.ledger.jsonl
