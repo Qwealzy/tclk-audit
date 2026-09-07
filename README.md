@@ -61,42 +61,60 @@ That decision was checked against live traffic before it was made, not against h
 
 ## Measured against the live ring
 
-Full retained `tclk-offers` export, 2026-09-05. 12,372 records.
+Full retained `tclk-offers` export, 2026-09-06. 9,384 records, seq 338318..347701, a 1.2-hour
+window.
+
+**Which decoder produced these.** `@flop-labs/tclk` at repo HEAD, not the published 0.1.0. The
+difference matters and is not cosmetic. 0.1.0 predates the `heartbeat` frame and the optional
+`reveal.ref` field, so it rejects live traffic that the current spec allows. An earlier version of
+this table reported 82 rejections; that figure came from 0.1.0 and counted conforming frames as
+malformed. The numbers below are what the current source accepts.
 
 | | |
 |---|---|
-| Frames decoded | 12,149 |
-| Rejected by the decoder | 82. Every one a schema violation the spec requires |
-| Lines that were not frames at all | 141 |
-| Contract threads reconstructed | 3,670 |
-| Transitions accepted | 7,753 |
-| Root-cause refusals | 258 |
-| Downstream consequences | 71 |
-| Final: claimed / proposed / accepted / locked / refunded | 1,586 / 964 / 892 / 122 / 101 |
+| Frames decoded | 9,054 |
+| Rejected by the decoder | 208 |
+| Lines that were not frames at all | 122 |
+| Contract threads reconstructed | 2,669 |
+| Transitions accepted | 4,831 |
+| Root-cause refusals | 627 |
+| Downstream consequences | 451 |
+| Final: accepted / claimed / proposed / locked / unopened / refunded / cancelled | 1,079 / 888 / 521 / 138 / 28 / 14 / 1 |
 
 Decoder rejections by reason:
 
 | Count | Reason |
 |---|---|
-| 32 | `unknown field on offer: contractId` |
-| 20 | `missing field on accept: nonce` |
-| 15 | `unknown frame type: undefined` |
-| 6 | `unknown field on offer: method` |
-| 3 | `unknown field on cancel: nonce` |
-| 3 | `claimByMs must be strictly before refundAfterMs` |
+| 48 | `unknown field on offer: method` |
+| 47 | `unknown field on lock: nonce` |
+| 22 | `missing field on accept: ref` |
+| 22 | `unknown field on lock: refundAfterMs` |
+| 22 | `unknown field on reveal: statement` |
+| 10 | `missing field on accept: contract` |
+| 10 | `unknown field on reveal: nonce` |
+| 10 | `unknown field on receipt: nonce` |
+| 10 | `missing field on accept: nonce` |
+| 3 | `offer id mismatch` |
+| 2 | `unknown field on cancel: nonce` |
+| 2 | `claimByMs must be strictly before refundAfterMs` |
+
+**203 of those 208 are required by the written schema**, `schema/tclk1-frames.schema.json`. Every
+`unknown field` and `missing field` line above is what `additionalProperties: false` and the
+`required` list already say. The remaining 5 are checks the schema cannot express: 2 compare
+`claimByMs` against `refundAfterMs`, and 3 recompute the offer id. So the decoder is not stricter
+than the document on field shapes. It is stricter on two derived facts.
 
 Anomaly classes by count:
 
 | Count | Anomaly |
 |---|---|
-| 212 | `accept in status accepted`. A second acceptance on an offer already bound |
-| 29 | `accept in status claimed` |
-| 8 | `lock-unresolved`. Locked, past `refundAfterMs`, no reveal and no refund in the window |
-| 6 | `contract id mismatch` |
-| 6 | `accept in status locked` |
-| 2 | `reveal in status accepted`. A reveal with no lock before it |
-| 2 | `refund in status claimed` |
-| 1 | `offer has expired` |
+| 257 | `reveal in status accepted`. A reveal with no applied lock before it |
+| 226 | `accept in status accepted`. A second acceptance on an offer already bound |
+| 99 | `refund refused: refund window not open yet` |
+| 16 | `refund in status claimed` |
+| 16 | `accept in status locked` |
+| 10 | `accept in status claimed` |
+| 3 | `contract id mismatch` |
 
 ---
 
@@ -105,12 +123,13 @@ Anomaly classes by count:
 **Root causes versus cascade.** Once a transition is refused the state does not move, so every later
 frame in that thread is refused too. A lock lands "in status proposed" because the accept before it
 never applied. Counting those separately multiplies one cause into a thread's worth of noise. The
-329 raw refusals over the ring resolve to 258 root causes and 71 consequences. Only roots are
+1,078 raw refusals over this window resolve to 627 root causes and 451 consequences. Only roots are
 anomalies. Each consequence carries the seq of the refusal that caused it.
 
 **A warm-up boundary.** An accept whose offer is missing looks like an orphan. Rooms are a ring, so
-the beginning of any window is always missing what came before it. Of the 5 accepts with no offer in
-the ring, 4 were in the first 5% of the window and all 5 were in the first 20%. Every one was a
+the beginning of any window is always missing what came before it. Measured on the 2026-09-05
+export, which is where the default came from: of the 5 accepts with no offer in the ring, 4 were in
+the first 5% of the window and all 5 were in the first 20%. Every one was a
 contract whose offer had already been dropped. None was an actual orphan. Reporting them would mean
 reporting retention as misconduct.
 
