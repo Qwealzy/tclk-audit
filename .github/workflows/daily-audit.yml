@@ -1,6 +1,7 @@
 name: Daily audit
 
-# The schedule below is currently off. See the note under `on:`.
+# The schedule is off, and so is the commit step. See the notes under `on:`
+# and above the commit step.
 #
 # Once a day: export the retained tclk-offers ring, run the structural checks,
 # and commit the findings file. The history accumulates into a public record.
@@ -21,8 +22,9 @@ on:
   # names word for word, so a passing run would commit a findings file that
   # carries a live injection path. Turn the schedule back on once that is fixed.
   #
-  # Manual runs stay available for testing. A manual run that passes still
-  # commits and pushes its findings file.
+  # Manual runs stay available for testing, and they cannot publish either.
+  # The commit step at the end is switched off with `if: false` for the same
+  # reason.
   #
   # schedule:
   #   # 06:20 UTC. Off the hour on purpose. Every cron job on the platform fires
@@ -83,7 +85,13 @@ jobs:
       - name: Audit the retained ring
         run: node scripts/scheduled-audit.mjs
 
+      # Switched off until the decoder rejection table stops copying field
+      # names word for word. A crafted name reaches the findings file through
+      # it, and the trigger makes no difference to that, so no run of any kind
+      # commits or pushes. Remove this `if:` in the change that closes the
+      # injection path.
       - name: Commit the findings
+        if: false
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
