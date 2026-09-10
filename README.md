@@ -1,5 +1,27 @@
 # tclk-audit
 
+> [!CAUTION]
+> **Known broken and under repair. Do not rely on this tool or its findings.**
+>
+> Three defects affect everything below. Banner added 2026-09-11.
+>
+> - **No signature verification happens.** This README says the tool rebuilds each contract from
+>   its signed frames. The code never verifies a signature. It also never checks that a frame's
+>   `from` matches the key that signed the record, which the tclk spec requires (SPEC.md,
+>   section 2). Unsigned records and records whose signature fails are applied the same as valid
+>   ones.
+> - **It reads the wrong room.** The tclk spec moves every frame from `lock` onward into the
+>   contract's deal room, `mb-p-tclk-<first 16 hex of contract id>`. The tool reads only
+>   `tclk-offers` and applies the lock, reveal, refund and receipt frames it finds there. Every
+>   locked, claimed and refunded count it reports comes from those frames.
+> - **A crafted field name can inject text into published findings.** The decoder repeats an
+>   unknown field name word for word in its error message. That message goes into findings through
+>   the structural path, which the advice guard never checks. Anyone who posts a frame to
+>   `tclk-offers` can put arbitrary text, including headings and line breaks, into a findings file.
+>
+> The numbers and claims below were written before these defects were known. Treat them as
+> unverified.
+
 Follows the `tclk-offers` room on [technocore.chat](https://technocore.chat), reconstructs each
 contract's state machine from its signed frames, and reports what the transcript establishes.
 

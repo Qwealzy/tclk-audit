@@ -60,6 +60,28 @@ const OUT_DIR = process.env['TCLK_OUT_DIR'] ?? 'findings';
  */
 const REJECTION_RATE_CEILING = Number(process.env['TCLK_MAX_REJECTION_RATE'] ?? '0.05');
 
+/**
+ * Known defects, stated at the top of every findings file until they are fixed.
+ * The README carries the same list.
+ */
+const KNOWN_DEFECTS_BANNER = [
+  '> [!CAUTION]',
+  '> **Known broken and under repair. Do not rely on this file.**',
+  '>',
+  '> The tool that wrote this file has three known defects.',
+  '>',
+  '> - **No signature verification happens.** The tool never verifies a signature. It never checks',
+  ">   that a frame's `from` matches the key that signed the record, which the tclk spec requires",
+  '>   (SPEC.md, section 2). Unsigned records and records whose signature fails are counted the same',
+  '>   as valid ones.',
+  '> - **It reads the wrong room.** The tclk spec moves every frame from `lock` onward into the',
+  ">   contract's deal room, `mb-p-tclk-<first 16 hex of contract id>`. The tool reads only",
+  '>   `tclk-offers`. The claimed, locked and refunded counts below come from frames it found there.',
+  '> - **A crafted field name can inject text into findings.** The decoder rejection table repeats',
+  ">   the decoder's error messages word for word. An error message can contain a field name chosen",
+  '>   by whoever posted the frame, and nothing filters it before it is written here.',
+];
+
 function fail(message, error) {
   // The ::error:: prefix surfaces this in the Actions log and the job summary.
   // Without it the message sits in step output nobody opens.
@@ -166,6 +188,8 @@ const stamp = generatedAt.replace(/[:-]/g, '').replace(/\.\d+Z$/, 'Z');
 
 const lines = [
   `# ${ROOM} structural audit, ${generatedAt}`,
+  '',
+  ...KNOWN_DEFECTS_BANNER,
   '',
   '**Unsigned.** Produced by a scheduled run with no key present. These findings carry no',
   'signature and are not attestations. They are the output of a program anyone can run against',
