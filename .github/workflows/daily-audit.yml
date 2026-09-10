@@ -1,5 +1,7 @@
 name: Daily audit
 
+# The schedule below is currently off. See the note under `on:`.
+#
 # Once a day: export the retained tclk-offers ring, run the structural checks,
 # and commit the findings file. The history accumulates into a public record.
 #
@@ -15,10 +17,17 @@ name: Daily audit
 # The no-signing step below greps for it rather than trusting this comment.
 
 on:
-  schedule:
-    # 06:20 UTC. Off the hour on purpose. Every cron job on the platform fires
-    # at the top of the hour, and this one has no reason to join that queue.
-    - cron: '20 6 * * *'
+  # The daily schedule is off. The decoder rejection table still copies field
+  # names word for word, so a passing run would commit a findings file that
+  # carries a live injection path. Turn the schedule back on once that is fixed.
+  #
+  # Manual runs stay available for testing. A manual run that passes still
+  # commits and pushes its findings file.
+  #
+  # schedule:
+  #   # 06:20 UTC. Off the hour on purpose. Every cron job on the platform fires
+  #   # at the top of the hour, and this one has no reason to join that queue.
+  #   - cron: '20 6 * * *'
   workflow_dispatch:
 
 # Only one run at a time. Two overlapping runs would race on the push.
