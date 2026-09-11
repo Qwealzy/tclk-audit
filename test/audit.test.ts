@@ -21,6 +21,8 @@ import { renderFindings } from '../src/publish.js';
  * on frames this repository built would agree with itself and nothing else.
  */
 const FIXTURE = fileURLToPath(new URL('./fixtures/tclk-slice.jsonl', import.meta.url));
+/** The room the fixture was read from. Without it no signature can be checked. */
+const ROOM = 'tclk-offers';
 
 function loadFixture(): RoomRecord[] {
   return readFileSync(FIXTURE, 'utf8')
@@ -31,7 +33,7 @@ function loadFixture(): RoomRecord[] {
 }
 
 describe('the normative decoder handles live traffic', () => {
-  const scan = scanRecords(loadFixture());
+  const scan = scanRecords(loadFixture(), { room: ROOM });
 
   it('decodes the overwhelming majority of frames', () => {
     const seen = scan.frames.length + scan.rejections.length;
@@ -80,7 +82,7 @@ describe('timestamps', () => {
 });
 
 describe('auditing the fixture', () => {
-  const scan = scanRecords(loadFixture());
+  const scan = scanRecords(loadFixture(), { room: ROOM });
   const index = buildThreads(scan.frames);
   const report = audit(index, scan.rejections, { nowMs: Date.parse('2026-09-05T18:00:00.000Z') });
 
@@ -140,7 +142,7 @@ describe('auditing the fixture', () => {
 });
 
 describe('rendered findings state facts, never advice', () => {
-  const scan = scanRecords(loadFixture());
+  const scan = scanRecords(loadFixture(), { room: ROOM });
   const report = audit(buildThreads(scan.frames), scan.rejections, { nowMs: Date.now() });
   const lines = renderFindings(report, 'anomaly');
 
@@ -238,7 +240,7 @@ describe('rejection reasons are inert wherever they are printed', () => {
   it('rebuilds every refusal in the fixture, even an ordinary field name', () => {
     // The fixture's refusals name a real field, `contractId`. It looks harmless
     // and is hidden all the same, since this reader cannot tell harmless from not.
-    const rejections = scanRecords(records).rejections;
+    const rejections = scanRecords(records, { room: ROOM }).rejections;
     expect(rejections.length).toBeGreaterThan(0);
     for (const rejection of rejections) {
       const source = records.find((r) => BigInt(r.seq) === rejection.seq);
@@ -272,17 +274,27 @@ describe('rejection reasons are inert wherever they are printed', () => {
     for (const line of lines) expect(line).toMatch(/^[\x20-\x7e]+$/);
   });
 
-  it('encodes a crafted sender the same way, on rejections and on frames', () => {
+  it('encodes a crafted sender the same way, on a decoder refusal and a signature refusal', () => {
     // The live service only accepts a did:key or a plain name. The reader
-    // does not rely on that.
+    // does not rely on that. The offer keeps its real signature, which does
+    // not verify for this sender, so it never becomes a frame. Only a frame
+    // signed by its sender's did:key does.
     const lf = String.fromCharCode(10);
     const sender = 'nick' + lf + '::warning::FAKE' + lf + '##[error]FAKE';
     if (offer === undefined) throw new Error('the fixture has no decodable offer');
-    const scan = scanRecords([
-      { ...withField('x'), from: sender },
-      { ...offer, from: sender },
+    const scan = scanRecords(
+      [
+        { ...withField('x'), from: sender },
+        { ...offer, from: sender },
+      ],
+      { room: ROOM },
+    );
+    expect(scan.frames).toEqual([]);
+    expect(scan.rejections.map((r) => [r.refusedBy, r.verification])).toEqual([
+      ['decoder', undefined],
+      ['signature-check', 'bad-signature'],
     ]);
-    const senders = [...scan.rejections, ...scan.frames].map((item) => item.from);
+    const senders = scan.rejections.map((item) => item.from);
     expect(senders).toHaveLength(2);
     for (const from of senders) {
       expect(from).toMatch(/^[ -~]+$/);
@@ -293,7 +305,7 @@ describe('rejection reasons are inert wherever they are printed', () => {
   });
 
   it('leaves every real sender in the fixture unchanged', () => {
-    const scan = scanRecords(records);
+    const scan = scanRecords(records, { room: ROOM });
     const bySeq = new Map(records.map((r) => [BigInt(r.seq), r.from]));
     const items = [...scan.frames, ...scan.rejections];
     expect(items.length).toBeGreaterThan(1000);

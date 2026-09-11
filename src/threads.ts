@@ -31,6 +31,12 @@ import type { FrameRecord } from './frames.js';
  * taken only from an accept it can be recomputed for. See
  * `recomputedContractId`. A thread's own contract id comes from the accept the
  * state machine takes. See `acceptTaken`.
+ *
+ * Every frame here came out of `scanRecords`, so its signature verifies and
+ * its `from` is the key that signed it. A frame that fails that check never
+ * gets here. So an unsigned or wrongly signed copy of an offer cannot take its
+ * id first, and such an accept cannot bind a contract, give a thread its
+ * contract id, or be the accept the machine takes.
  */
 
 /**

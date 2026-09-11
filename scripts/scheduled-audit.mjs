@@ -39,6 +39,13 @@
  * deal room of every accepted contract in the window through `/export`, one
  * read each, oldest contract first. It stops at the first refused read, a 429
  * included, retries nothing, and the file says how far it got.
+ *
+ * SIGNATURES
+ *
+ * Only a frame whose signature verifies, and whose `from` is the key that
+ * signed it, is applied (src/frames.ts). Every other decoded frame is left out
+ * and counted by kind under Signature policy. Those frames decoded, so they do
+ * not count toward the decode rejection ceiling below.
  */
 
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
@@ -82,8 +89,8 @@ const KNOWN_DEFECTS_BANNER = [
   '> [!CAUTION]',
   '> **Known broken and under repair. Do not rely on this file.**',
   '>',
-  '> The tool that wrote this file has one known defect, the second listed. The other two were fixed',
-  '> before this file was written.',
+  '> The tool that wrote this file has no open defect on this list. All three were fixed before this',
+  '> file was written.',
   '>',
   '> - **Fixed on 2026-09-11: later refusals are no longer all chained to the first.** Chains are kept',
   `>   per contract. In \`${ROOM}\`, a refusal the machine gives for any reason other than status is`,
@@ -92,10 +99,13 @@ const KNOWN_DEFECTS_BANNER = [
   '>   reports. A frame that arrives after the status has moved past it, a late copy for example, can',
   '>   be chained to an unrelated earlier refusal. Either can be counted below as a downstream',
   '>   consequence.',
-  `> - **Signatures are checked but not acted on.** The Signatures table counts the checks on frames`,
-  `>   read from \`${ROOM}\`. Deal-room frames are checked and not counted there. The tclk spec says`,
-  '>   only a verified frame is a commitment (SPEC.md, section 2). An unsigned record, or one whose',
-  '>   signature fails, still moves a contract here the same as a valid one.',
+  '> - **Fixed on 2026-09-12: only a frame whose signature verifies moves a contract.** The tclk spec',
+  '>   says only a verified frame is a commitment (SPEC.md, section 2). A frame whose record is',
+  '>   unsigned, whose signature does not verify, whose `from` names another key, or whose signature',
+  `>   this tool could not check is left out, in \`${ROOM}\` and in deal rooms alike. Signature policy`,
+  '>   below counts each kind. One limit remains. An unsigned frame is left out even when its sender',
+  '>   is honest, since the spec calls it data, not a commitment. A file written before 2026-09-12',
+  '>   counted frames this one leaves out, so counts across that date do not compare.',
   "> - **Fixed on 2026-09-11: a stranger's words no longer reach this file through a decoder refusal.**",
   ">   Each refusal below is rebuilt from the decoder's fixed text. Every part a stranger chose, such",
   '>   as a field name, a value or a frame type, appears only as its byte length and SHA-256.',
@@ -161,12 +171,16 @@ if (records.length === 0) fail(`export of /r/${ROOM} contained no parseable reco
 
 const scan = scanRecords(records, { room: ROOM });
 
-// A rejection is the decoder's, or the shape check's after the decoder had
-// accepted the line (src/frames.ts). Both are lines this run could not use.
-// They are reported apart, since only the first are the decoder's.
+// A rejection is the decoder's, the shape check's after the decoder had
+// accepted the line, or the signature check's after that (src/frames.ts). All
+// are lines this run does not apply. They are reported apart, since only the
+// first are the decoder's.
 const byDecoder = (rejections) => rejections.filter((r) => r.refusedBy === 'decoder');
 const byShapeCheck = (rejections) => rejections.filter((r) => r.refusedBy === 'shape-check');
+const bySignatureCheck = (rejections) => rejections.filter((r) => r.refusedBy === 'signature-check');
+const decoderRejected = byDecoder(scan.rejections).length;
 const shapeRefused = byShapeCheck(scan.rejections).length;
+const signatureRefused = bySignatureCheck(scan.rejections).length;
 
 // Three ways a run can produce nothing useful. Each fails before anything is
 // written. A missing file for a day is a visible gap. A file full of zeroes is
@@ -175,18 +189,20 @@ const shapeRefused = byShapeCheck(scan.rejections).length;
 if (scan.frames.length === 0) {
   fail(
     `no usable frames in ${records.length} records: ` +
-      `${scan.rejections.length - shapeRefused} rejected by the decoder, ` +
-      `${shapeRefused} refused by the shape check, ${scan.knownGaps.length} known decoder gaps, ` +
-      `${scan.nonFrameCount} not tclk lines`,
+      `${decoderRejected} rejected by the decoder, ` +
+      `${shapeRefused} refused by the shape check, ${signatureRefused} left out by the signature check, ` +
+      `${scan.knownGaps.length} known decoder gaps, ${scan.nonFrameCount} not tclk lines`,
   );
 }
 
 // A known decoder gap is still a line the installed decoder could not read,
 // so it counts toward the ceiling the same as any other refusal. So does a
 // line the shape check refused. If the decoder and the shape check ever
-// disagree about most of the traffic, this run stops instead of hiding it.
-const refused = [...scan.rejections, ...scan.knownGaps];
-const tclkLines = scan.frames.length + refused.length;
+// disagree about most of the traffic, this run stops instead of hiding it. A
+// frame the signature check left out decoded and passed the shape check, so it
+// counts as a line here and not as a refusal.
+const refused = [...byDecoder(scan.rejections), ...byShapeCheck(scan.rejections), ...scan.knownGaps];
+const tclkLines = scan.frames.length + signatureRefused + refused.length;
 const rejectionRate = tclkLines === 0 ? 1 : refused.length / tclkLines;
 
 if (rejectionRate > REJECTION_RATE_CEILING) {
@@ -232,8 +248,9 @@ const dealReport = audit(
 );
 
 // Every tclk line in the export, as the window was counted before frames were
-// split by room. A frame in the wrong room is still part of the ring.
-const windowSeqs = [...scan.frames, ...refused].map((item) => item.seq);
+// split by room. A frame in the wrong room, or one the signature check left
+// out, is still part of the ring.
+const windowSeqs = [...scan.frames, ...scan.rejections, ...scan.knownGaps].map((item) => item.seq);
 const windowFirst = windowSeqs.reduce((a, b) => (b < a ? b : a), windowSeqs[0]);
 const windowLast = windowSeqs.reduce((a, b) => (b > a ? b : a), windowSeqs[0]);
 
@@ -256,10 +273,22 @@ const anomalies = tally(
 );
 const rejections = tally(byDecoder(scan.rejections), (r) => r.reason);
 
-// What checking each frame's signature and sender found. Reported only. The
-// audit above folded every decoded frame, whatever this says.
-const verificationCounts = new Map(tally(scan.frames, (f) => f.verification));
-const verificationCount = (kind) => verificationCounts.get(kind) ?? 0;
+// What checking each decoded frame's signature and sender found. Only the
+// verified ones were applied above. The rest are rejections from the signature
+// check, each carrying what it found.
+function signatureCounts(scans) {
+  const counts = { verified: 0, 'from-mismatch': 0, 'bad-signature': 0, unsigned: 0, unverifiable: 0 };
+  for (const s of scans) {
+    counts.verified += s.frames.length;
+    for (const r of bySignatureCheck(s.rejections)) counts[r.verification ?? 'unverifiable'] += 1;
+  }
+  return counts;
+}
+const boardSignatures = signatureCounts([scan]);
+const dealSignatures = signatureCounts(dealScans);
+const signatureRow = (label, kind, note) =>
+  `| ${label} | ${boardSignatures[kind]} | ${dealSignatures[kind]} | ${note} |`;
+const badSignatures = boardSignatures['bad-signature'] + dealSignatures['bad-signature'];
 
 const wrongRoomOnBoard = routed.wrongRoom.filter((w) => w.room === ROOM).length;
 const dealRejections = tally(
@@ -328,29 +357,39 @@ const lines = [
   '',
   '| | |',
   '|---|---|',
-  `| Decoded | ${scan.frames.length} |`,
-  `| Rejected by the decoder | ${scan.rejections.length - shapeRefused} |`,
+  `| Decoded | ${scan.frames.length + signatureRefused} |`,
+  `| Rejected by the decoder | ${decoderRejected} |`,
   `| Refused by the shape check after decoding | ${shapeRefused} |`,
   `| Known decoder gaps | ${scan.knownGaps.length} |`,
   `| Lines that were not frames | ${scan.nonFrameCount} |`,
   '',
-  '## Signatures',
+  '## Signature policy',
   '',
   "Each decoded frame is checked against SPEC.md section 2. It is a commitment only when its record's",
   "signature verifies and the frame's `from` is the key that signed it. Anything else is what the spec",
-  'calls "data, not a commitment". This run reports the difference and does not act on it yet.',
+  'calls "data, not a commitment". This run applies only the commitments. Every other decoded frame',
+  `is left out of the audit, in \`${ROOM}\` and in deal rooms alike, and counted here.`,
   '',
-  '| | |',
-  '|---|---|',
-  '| Signature verifies, `from` is the signer | ' + verificationCount('verified') + ' |',
-  '| Signature verifies, `from` names another key | ' + verificationCount('from-mismatch') + ' |',
-  '| Signature does not verify | ' + verificationCount('bad-signature') + ' |',
-  '| Unsigned | ' + verificationCount('unsigned') + ' |',
-  '| Could not be checked | ' + verificationCount('unverifiable') + ' |',
+  `| | \`${ROOM}\` | deal rooms | |`,
+  '|---|---|---|---|',
+  signatureRow('Signature verifies, `from` is the signer', 'verified', 'applied'),
+  signatureRow(
+    'Signature verifies, `from` names another key',
+    'from-mismatch',
+    'left out. It breaks a MUST in SPEC.md section 2',
+  ),
+  signatureRow('Signature does not verify', 'bad-signature', 'left out'),
+  signatureRow('Unsigned', 'unsigned', 'left out. Not re-verifiable, which is not the same as invalid'),
+  signatureRow('Could not be checked', 'unverifiable', "left out. A limit of this tool, not the sender's"),
+  '',
+  'Signatures that do not verify are counted on their own. A sudden rise there more likely means a',
+  'fault in this tool than many senders at once. A nonce that loses digits on the way in fails a good',
+  'signature, for example.',
   '',
   '## Contracts',
   '',
-  `These count only the frames that belong in \`${ROOM}\`. Deal rooms, below, covers the rest.`,
+  `These count only the frames that belong in \`${ROOM}\` and whose signature verifies. Deal rooms,`,
+  'below, covers the rest.',
   '',
   '| | |',
   '|---|---|',
@@ -372,14 +411,15 @@ const lines = [
   'Once the state machine accepts a contract, every later frame belongs in its deal room,',
   '`mb-p-tclk-<first 16 hex of the contract id>`. This run derives each room from a contract id it',
   'recomputes from the offer and the accept. A frame in the wrong room is counted here and applied',
-  'nowhere.',
+  'nowhere. Every count here is over verified frames, so an accept left out by the signature check',
+  'is not among the mismatches either.',
   '',
   '| | |',
   '|---|---|',
   `| Accepts whose contract id does not recompute | ${mismatches.length} |`,
   `| Contracts accepted | ${bindings.length} |`,
   `| Deal rooms read | ${reads.scans.size} of ${dealRooms.length} |`,
-  `| Frames decoded in deal rooms | ${dealScans.reduce((n, s) => n + s.frames.length, 0)} |`,
+  `| Frames decoded in deal rooms | ${dealScans.reduce((n, s) => n + s.frames.length + bySignatureCheck(s.rejections).length, 0)} |`,
   `| Rejected by the decoder in deal rooms | ${dealRejectionCount} |`,
   `| Refused by the shape check in deal rooms | ${dealShapeRefused} |`,
   `| Known decoder gaps in deal rooms | ${dealScans.reduce((n, s) => n + s.knownGaps.length, 0)} |`,
@@ -501,4 +541,18 @@ console.log(
     `${routed.wrongRoom.length} frames in the wrong room` +
     (reads.stopped === null ? '' : ` | stopped at ${reads.stopped.error}`),
 );
+console.log(
+  `  signatures left out: ${boardSignatures['from-mismatch'] + dealSignatures['from-mismatch']} from-mismatch, ` +
+    `${badSignatures} bad-signature, ${boardSignatures.unsigned + dealSignatures.unsigned} unsigned, ` +
+    `${boardSignatures.unverifiable + dealSignatures.unverifiable} unverifiable`,
+);
 console.log(`  read budget after run: ${JSON.stringify(transport.budget.read)}`);
+if (badSignatures > 0) {
+  // The ::warning:: prefix puts this in the job summary. Signatures that do not
+  // verify are the one count here that can point at this tool. The line is
+  // fixed text and a number, nothing from a room.
+  console.log(
+    `::warning::scheduled-audit: ${badSignatures} frame(s) carry a signature that does not verify, ` +
+      'and were left out. A sudden rise more likely means a fault in this tool than many senders at once.',
+  );
+}

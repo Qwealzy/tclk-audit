@@ -35,6 +35,12 @@ import { buildThreads, recomputedContractId, type ContractThread, type ThreadInd
  * room is left out of the fold, so it cannot move a contract, whatever its
  * signature says. STATED [tclk HEAD SPEC.md section 2]: "A valid signature in
  * the wrong room cannot advance state."
+ *
+ * Every frame here came out of `scanRecords`, so its signature verifies for the
+ * room it was read from. A deal room is read only for a contract a verified
+ * accept bound. A frame is counted as in the wrong room only when its
+ * signature verifies. Any other frame is counted by the signature check, and
+ * never here.
  */
 
 /** A contract the state machine accepted, and the room its later frames belong in. */

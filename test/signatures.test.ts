@@ -4,11 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { encodeFrame, type TclkFrame } from '@flop-labs/tclk';
 import { Identity } from 'technocore-client';
 import { parseExportLine, scanRecords, type RoomRecord } from '../src/frames.js';
-import { buildThreads } from '../src/threads.js';
-import { audit, type AuditReport } from '../src/audit.js';
 
 /**
  * Signatures and senders, checked against SPEC.md section 2 of tclk 0.1.0.
+ * What the policy does with each outcome is in signature-policy.test.ts.
  *
  * The vectors are signed here by throwaway identities that exist only in
  * memory while the test runs. No key is read or written.
@@ -41,12 +40,18 @@ function exportLine(fields: { from: string; text: string; nonce?: string; sig?: 
   return '{' + parts.join(',') + '}';
 }
 
+/**
+ * What checking one line's signature found. A verified frame is in `frames`.
+ * Any other outcome is the one rejection, from the signature check.
+ */
 function verificationOf(line: string, options: { room?: string } = { room: ROOM }): string | undefined {
   const record = parseExportLine(line);
   if (record === null) throw new Error('the line did not parse');
   const scan = scanRecords([record], options);
-  expect(scan.frames).toHaveLength(1);
-  return scan.frames[0]?.verification;
+  expect(scan.frames.length + scan.rejections.length).toBe(1);
+  if (scan.frames.length === 1) return scan.frames[0]?.verification;
+  expect(scan.rejections[0]?.refusedBy).toBe('signature-check');
+  return scan.rejections[0]?.verification;
 }
 
 const fixture = readFileSync(FIXTURE, 'utf8')
@@ -109,7 +114,7 @@ describe('each frame carries what its signature check found', () => {
 
     // The same record after a plain JSON.parse, which rounded its nonce.
     const lossy = JSON.parse(line) as RoomRecord;
-    expect(scanRecords([lossy], { room: ROOM }).frames[0]?.verification).toBe('unverifiable');
+    expect(scanRecords([lossy], { room: ROOM }).rejections[0]?.verification).toBe('unverifiable');
 
     const noNonce = exportLine({ from: signer.did, text: signed.text, sig: signed.sig });
     expect(verificationOf(noNonce)).toBe('unverifiable');
@@ -125,28 +130,11 @@ describe('the committed fixture', () => {
     expect(Object.fromEntries(counts)).toEqual({ verified: scan.frames.length });
   });
 
-  it('checks nothing when the room is not given', () => {
+  it('checks nothing when the room is not given, and so leaves every signed frame out', () => {
     const scan = scanRecords(fixture);
-    expect(scan.frames.length).toBeGreaterThan(1000);
-    expect(scan.frames.every((f) => f.verification === 'unverifiable')).toBe(true);
-  });
-});
-
-describe('verification does not reach the audit yet', () => {
-  it('gives the same audit whatever the verification says', () => {
-    const scan = scanRecords(fixture, { room: ROOM });
-    const relabelled = scan.frames.map((f) => ({ ...f, verification: 'bad-signature' as const }));
-    const nowMs = Date.parse('2026-09-05T18:00:00.000Z');
-    const shape = (r: AuditReport) => ({
-      threads: r.threadCount,
-      byStatus: r.byStatus,
-      accepted: r.transitionsAccepted,
-      rejected: r.transitionsRejected,
-      blocked: r.transitionsBlocked,
-      findings: r.findings,
-    });
-    const asIs = audit(buildThreads(scan.frames), scan.rejections, { nowMs });
-    const allBad = audit(buildThreads(relabelled), scan.rejections, { nowMs });
-    expect(shape(allBad)).toEqual(shape(asIs));
+    expect(scan.frames).toEqual([]);
+    const left = scan.rejections.filter((r) => r.refusedBy === 'signature-check');
+    expect(left.length).toBeGreaterThan(1000);
+    expect(left.every((r) => r.verification === 'unverifiable')).toBe(true);
   });
 });

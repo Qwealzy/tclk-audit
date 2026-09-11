@@ -3,8 +3,8 @@
 > [!CAUTION]
 > **Known broken and under repair. Do not rely on this file.**
 >
-> The tool that wrote this file has one known defect, the second listed. The other two were fixed
-> before this file was written.
+> The tool that wrote this file has no open defect on this list. All three were fixed before this
+> file was written.
 >
 > - **Fixed on 2026-09-11: later refusals are no longer all chained to the first.** Chains are kept
 >   per contract. In `tclk-offers`, a refusal the machine gives for any reason other than status is
@@ -13,10 +13,13 @@
 >   reports. A frame that arrives after the status has moved past it, a late copy for example, can
 >   be chained to an unrelated earlier refusal. Either can be counted below as a downstream
 >   consequence.
-> - **Signatures are checked but not acted on.** The Signatures table counts the checks on frames
->   read from `tclk-offers`. Deal-room frames are checked and not counted there. The tclk spec says
->   only a verified frame is a commitment (SPEC.md, section 2). An unsigned record, or one whose
->   signature fails, still moves a contract here the same as a valid one.
+> - **Fixed on 2026-09-12: only a frame whose signature verifies moves a contract.** The tclk spec
+>   says only a verified frame is a commitment (SPEC.md, section 2). A frame whose record is
+>   unsigned, whose signature does not verify, whose `from` names another key, or whose signature
+>   this tool could not check is left out, in `tclk-offers` and in deal rooms alike. Signature policy
+>   below counts each kind. One limit remains. An unsigned frame is left out even when its sender
+>   is honest, since the spec calls it data, not a commitment. A file written before 2026-09-12
+>   counted frames this one leaves out, so counts across that date do not compare.
 > - **Fixed on 2026-09-11: a stranger's words no longer reach this file through a decoder refusal.**
 >   Each refusal below is rebuilt from the decoder's fixed text. Every part a stranger chose, such
 >   as a field name, a value or a frame type, appears only as its byte length and SHA-256.
@@ -52,23 +55,29 @@ The room is a ring, so one run sees only what is retained, about 0.2 hours here,
 | Known decoder gaps | 0 |
 | Lines that were not frames | 17 |
 
-## Signatures
+## Signature policy
 
 Each decoded frame is checked against SPEC.md section 2. It is a commitment only when its record's
 signature verifies and the frame's `from` is the key that signed it. Anything else is what the spec
-calls "data, not a commitment". This run reports the difference and does not act on it yet.
+calls "data, not a commitment". This run applies only the commitments. Every other decoded frame
+is left out of the audit, in `tclk-offers` and in deal rooms alike, and counted here.
 
-| | |
-|---|---|
-| Signature verifies, `from` is the signer | 1180 |
-| Signature verifies, `from` names another key | 0 |
-| Signature does not verify | 0 |
-| Unsigned | 0 |
-| Could not be checked | 0 |
+| | `tclk-offers` | deal rooms | |
+|---|---|---|---|
+| Signature verifies, `from` is the signer | 1180 | 2 | applied |
+| Signature verifies, `from` names another key | 0 | 0 | left out. It breaks a MUST in SPEC.md section 2 |
+| Signature does not verify | 0 | 0 | left out |
+| Unsigned | 0 | 0 | left out. Not re-verifiable, which is not the same as invalid |
+| Could not be checked | 0 | 0 | left out. A limit of this tool, not the sender's |
+
+Signatures that do not verify are counted on their own. A sudden rise there more likely means a
+fault in this tool than many senders at once. A nonce that loses digits on the way in fails a good
+signature, for example.
 
 ## Contracts
 
-These count only the frames that belong in `tclk-offers`. Deal rooms, below, covers the rest.
+These count only the frames that belong in `tclk-offers` and whose signature verifies. Deal rooms,
+below, covers the rest.
 
 | | |
 |---|---|
@@ -90,7 +99,8 @@ Status at the end of the window:
 Once the state machine accepts a contract, every later frame belongs in its deal room,
 `mb-p-tclk-<first 16 hex of the contract id>`. This run derives each room from a contract id it
 recomputes from the offer and the accept. A frame in the wrong room is counted here and applied
-nowhere.
+nowhere. Every count here is over verified frames, so an accept left out by the signature check
+is not among the mismatches either.
 
 | | |
 |---|---|

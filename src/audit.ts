@@ -42,6 +42,27 @@ export type FindingCode =
    */
   | 'frame-rejected-shape'
   /**
+   * A frame whose record carries no signature. Left out, and severity info.
+   * STATED [RENDERING]: "not re-verifiable", which is not "invalid".
+   */
+  | 'frame-unsigned'
+  /**
+   * A frame signed by one key whose `from` names another. Left out, and
+   * severity notice. It breaks the MUST in SPEC.md section 2.
+   */
+  | 'frame-from-mismatch'
+  /**
+   * A frame whose signature does not verify. Left out, and severity notice.
+   * Many at once more likely mean a fault in this reader than many faulty
+   * senders.
+   */
+  | 'frame-bad-signature'
+  /**
+   * A frame whose signature this reader could not check. Left out, and
+   * severity info. The limit is this reader's, so the detail names no sender.
+   */
+  | 'frame-unverifiable'
+  /**
    * The machine refused a transition, and no open root in its contract's chain
    * explains it. Severity anomaly, counted in `transitionsRejected`.
    *
@@ -139,6 +160,35 @@ function isStatusRefusal(reason: string | undefined): boolean {
   return STATUS_REFUSAL.test(reason) || reason === 'receipt before a terminal status';
 }
 
+/**
+ * The finding for one refused line. Its detail is the refusal as scanRecords
+ * built it. Only fixed text is kept, and every part a stranger chose is shown
+ * as its length and hash. The sender follows, except for a frame this reader
+ * could not check. See `FindingCode` for each code.
+ */
+function rejectionFinding(rejection: FrameRejection): Finding {
+  const base = { subject: `seq ${rejection.seq}`, seq: rejection.seq };
+  const attributed = `${rejection.reason} (from ${rejection.from})`;
+  if (rejection.refusedBy === 'decoder') {
+    return { ...base, code: 'frame-rejected', severity: 'notice', detail: attributed };
+  }
+  if (rejection.refusedBy === 'shape-check') {
+    return { ...base, code: 'frame-rejected-shape', severity: 'notice', detail: attributed };
+  }
+  switch (rejection.verification) {
+    case 'from-mismatch':
+      return { ...base, code: 'frame-from-mismatch', severity: 'notice', detail: attributed };
+    case 'bad-signature':
+      return { ...base, code: 'frame-bad-signature', severity: 'notice', detail: attributed };
+    case 'unsigned':
+      return { ...base, code: 'frame-unsigned', severity: 'info', detail: attributed };
+    default:
+      // Unverifiable, or a signature refusal that does not say why. Either
+      // way the check did not finish here, and the sender is not blamed.
+      return { ...base, code: 'frame-unverifiable', severity: 'info', detail: rejection.reason };
+  }
+}
+
 export function audit(
   index: ThreadIndex,
   rejections: readonly FrameRejection[],
@@ -146,10 +196,14 @@ export function audit(
 ): AuditReport {
   const warmup = options.warmupFraction ?? DEFAULT_WARMUP_FRACTION;
 
+  // A frame the signature check left out counts toward neither the window nor
+  // the warm-up boundary. It is left out the way a frame in the wrong room is,
+  // and that one never reaches this function. A line the decoder or the shape
+  // check refused still counts, as before. This package's own rule.
   const allSeqs: bigint[] = [];
   for (const thread of index.threads) for (const r of thread.frames) allSeqs.push(r.seq);
   for (const r of index.unattributed) allSeqs.push(r.seq);
-  for (const r of rejections) allSeqs.push(r.seq);
+  for (const r of rejections) if (r.refusedBy !== 'signature-check') allSeqs.push(r.seq);
 
   const windowFirstSeq = allSeqs.length === 0 ? null : allSeqs.reduce((a, b) => (b < a ? b : a));
   const windowLastSeq = allSeqs.length === 0 ? null : allSeqs.reduce((a, b) => (b > a ? b : a));
@@ -166,17 +220,7 @@ export function audit(
   let rejected = 0;
   let blocked = 0;
 
-  for (const rejection of rejections) {
-    findings.push({
-      code: rejection.refusedBy === 'shape-check' ? 'frame-rejected-shape' : 'frame-rejected',
-      severity: 'notice',
-      subject: `seq ${rejection.seq}`,
-      seq: rejection.seq,
-      // The refusal as scanRecords built it. Only fixed text is kept, and every
-      // part a stranger chose is shown as its length and hash.
-      detail: `${rejection.reason} (from ${rejection.from})`,
-    });
-  }
+  for (const rejection of rejections) findings.push(rejectionFinding(rejection));
 
   for (const thread of index.threads) {
     const threadFindings: Finding[] = [];

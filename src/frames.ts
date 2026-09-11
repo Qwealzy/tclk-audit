@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isTclkLine, tryDecodeFrame, decodeFrame, type TclkFrame } from '@flop-labs/tclk';
-import { parseRoomPage, verifyStoredMessage } from 'technocore-client';
+import { parseRoomPage, storedMessagePayload, verifyPayload } from 'technocore-client';
 
 /**
  * Reading tclk frames out of Technocore room messages.
@@ -25,6 +25,14 @@ import { parseRoomPage, verifyStoredMessage } from 'technocore-client';
  * decoded frame goes through `shapeRefusal`, which compares it with the
  * JavaScript types tclk declares. That check parses nothing and knows no
  * value rule. Every rule about values is still the decoder's.
+ *
+ * Then it applies SPEC.md section 2. STATED [SPEC.md section 2, tclk 0.1.0,
+ * lines 56 to 58]: a frame's `from` "MUST match the transport-verified `from`
+ * of the record that carried it. An unsigned frame is data, not a commitment".
+ * So only a frame whose signature verifies, and whose `from` is the key that
+ * signed it, reaches `ScanResult.frames`. Every other decoded frame becomes a
+ * rejection with `refusedBy: 'signature-check'`, and nothing downstream sees
+ * it. `FrameVerification` says what each outcome means.
  *
  * MEASURED 2026-09-05 against the full retained `tclk-offers` ring, 12,372
  * records: 12,149 frames decoded, 141 lines were not tclk at all, and 82 were
@@ -51,7 +59,8 @@ export interface FrameRecord {
    * then it proves possession of a key and nothing more.
    *
    * Passed through `sanitizeReason`. A did:key or a plain name comes back
-   * unchanged.
+   * unchanged. In `ScanResult.frames` it is always the did:key that signed the
+   * record.
    */
   readonly from: string;
   /**
@@ -60,8 +69,7 @@ export interface FrameRecord {
    * STATED [RENDERING]: a missing `sig` means "not re-verifiable", NOT
    * "invalid". Records written before the field existed do not have one.
    * STATED [patterns.md §6]: "An unsigned frame is data, not a commitment —
-   * readers drop it." This auditor records the distinction rather than
-   * silently trusting either.
+   * readers drop it." In `ScanResult.frames` this is always true.
    */
   readonly signed: boolean;
   /**
@@ -72,25 +80,35 @@ export interface FrameRecord {
    * record that carried it. An unsigned frame is data, not a commitment".
    * Only `verified` is a commitment. Every other value is data.
    *
-   * Nothing in this package acts on it yet. The audit still folds every
-   * decoded frame, whatever this says. How to use it is a separate decision.
+   * `scanRecords` puts a frame in `ScanResult.frames` only when this is
+   * `verified`. A frame built some other way is not checked again downstream.
    */
   readonly verification: FrameVerification;
 }
 
 /**
- * The outcome of checking one record against SPEC.md section 2.
+ * The outcome of checking one record against SPEC.md section 2, and what
+ * `scanRecords` does with it. Only `verified` reaches the audit.
  *
  *   - `verified` means the signature verifies for the record's room, nonce and
- *     text, and the frame's `from` is the key that signed it.
+ *     text, and the frame's `from` is the key that signed it. Applied.
  *   - `from-mismatch` means the signature verifies, and the frame's `from`
- *     names a different key.
+ *     names a different key. Left out, and counted apart. It breaks the MUST
+ *     in SPEC.md section 2 (lines 56 and 57).
  *   - `bad-signature` means the record carries a signature that does not
- *     verify.
- *   - `unsigned` means the record carries no signature.
+ *     verify. Left out, and counted apart. Many at once more likely mean a
+ *     fault in this reader than many faulty senders. A nonce that lost digits
+ *     on the way in fails a good signature, which is why `parseExportLine`
+ *     keeps them.
+ *   - `unsigned` means the record carries no signature. Left out. STATED
+ *     [RENDERING]: it is "not re-verifiable", which is not "invalid". STATED
+ *     [SPEC.md section 2, lines 57 and 58]: it is data, not a commitment.
  *   - `unverifiable` means the record carries a signature that cannot be
- *     checked here. The room was not given, or the nonce is missing or has
- *     already lost digits.
+ *     checked here. The room was not given, or the nonce is missing, has
+ *     already lost digits, or is not the form the transport signs. Left out,
+ *     and reported as a limit of this reader.
+ *     It says nothing about the sender. The scheduled run and the follower
+ *     always pass the room and keep nonces as digits.
  */
 export type FrameVerification =
   | 'verified'
@@ -99,9 +117,12 @@ export type FrameVerification =
   | 'unsigned'
   | 'unverifiable';
 
+/** Every outcome that leaves a frame out of the audit. */
+export type Unverified = Exclude<FrameVerification, 'verified'>;
+
 /**
- * A line that looked like a frame and was refused, by the normative decoder or
- * by the shape check after it.
+ * A line that looked like a frame and was refused, by the normative decoder, by
+ * the shape check after it, or by the signature check after that.
  */
 export interface FrameRejection {
   readonly seq: bigint;
@@ -111,13 +132,18 @@ export interface FrameRejection {
   /**
    * Who refused the line. `decoder` is 0.1.0's `decodeFrame`. `shape-check` is
    * this module, after the decoder had accepted the line. See `shapeRefusal`.
+   * `signature-check` is this module, after the shape check had passed it.
+   * See `FrameVerification`.
    */
-  readonly refusedBy: 'decoder' | 'shape-check';
+  readonly refusedBy: 'decoder' | 'shape-check' | 'signature-check';
+  /** Set only when `refusedBy` is `signature-check`. What that check found. */
+  readonly verification?: Unverified;
   /**
    * The refusal. A decoder refusal is rebuilt by `rebuildRefusal`. It keeps the
    * decoder's fixed text, and every part a stranger chose appears only as
    * `<N bytes, sha256:HEX>`. A shape refusal is this module's own text, built
-   * the same way by `shapeRefusal`. Either then goes through `sanitizeReason`.
+   * the same way by `shapeRefusal`. A signature refusal is fixed text and a
+   * frame type from `FRAME_SHAPES`. Each then goes through `sanitizeReason`.
    */
   readonly reason: string;
 }
@@ -150,10 +176,12 @@ export interface KnownDecoderGap extends FrameRejection {
 }
 
 export interface ScanResult {
+  /** Frames that decoded, passed the shape check, and are `verified`. */
   readonly frames: readonly FrameRecord[];
   /**
-   * Lines the decoder refused, apart from known decoder gaps, and lines it
-   * accepted that the shape check then refused. `refusedBy` tells them apart.
+   * Lines the decoder refused, apart from known decoder gaps. Then lines it
+   * accepted that the shape check refused, and frames that passed it whose
+   * signature check found anything but `verified`. `refusedBy` tells them apart.
    * A line here is never in `frames`.
    */
   readonly rejections: readonly FrameRejection[];
@@ -186,8 +214,9 @@ export interface RoomRecord {
 export interface ScanOptions {
   /**
    * The room the records were read from. A signature covers
-   * `<room>|<nonce>|<text>`, so without the room no signature can be checked,
-   * and every signed frame comes back `unverifiable`.
+   * `<room>|<nonce>|<text>`, so without the room no signature can be checked.
+   * Every signed frame is then `unverifiable` and left out. The scheduled run,
+   * the follower and `readDealRooms` always pass it.
    */
   readonly room?: string;
 }
@@ -298,6 +327,21 @@ export function scanRecords(
       continue;
     }
 
+    // Then SPEC.md section 2. Only a verified frame goes on. Any other is a
+    // rejection, and nothing downstream sees it.
+    const verification = verificationOf(record, frame, options.room);
+    if (verification !== 'verified') {
+      rejections.push({
+        seq: BigInt(record.seq),
+        ts: record.ts,
+        from,
+        refusedBy: 'signature-check',
+        verification,
+        reason: sanitizeReason(signatureReason(frame.type, verification)),
+      });
+      continue;
+    }
+
     frames.push({
       frame,
       seq: BigInt(record.seq),
@@ -305,7 +349,7 @@ export function scanRecords(
       ts: record.ts,
       from,
       signed: typeof record.sig === 'string',
-      verification: verificationOf(record, frame, options.room),
+      verification,
     });
   }
 
@@ -313,10 +357,37 @@ export function scanRecords(
 }
 
 /**
+ * The reason a frame the signature check left out is given. Fixed text, and a
+ * frame type the shape check has already matched in `FRAME_SHAPES`.
+ */
+function signatureReason(type: TclkFrame['type'], verification: Unverified): string {
+  switch (verification) {
+    case 'unsigned':
+      return `tclk-audit: unsigned ${type}, not re-verifiable`;
+    case 'from-mismatch':
+      return `tclk-audit: ${type} whose from is not the key that signed it`;
+    case 'bad-signature':
+      return `tclk-audit: ${type} whose signature does not verify`;
+    case 'unverifiable':
+      return `tclk-audit: ${type} whose signature this reader could not check`;
+  }
+}
+
+/**
  * Checks one record against SPEC.md section 2 with technocore-client's
  * `verifyStoredMessage`. It compares the frame's `from` with the raw transport
  * `from`, before `sanitizeReason`, because that is the key the signature was
  * checked against.
+ *
+ * The payload is built first, and on its own. STATED in technocore-client's
+ * dist/payload.js: `storedMessagePayload` throws for a nonce outside the form
+ * the transport signs, and its 19-digit rule lives there rather than here.
+ * A nonce like that leaves nothing to check, which is this reader's limit and
+ * not the sender's, so the frame is `unverifiable` and not `bad-signature`.
+ *
+ * It never throws. STATED in technocore-client's dist/verify.js: `verifyPayload`
+ * returns false for a malformed signature or key. Should anything throw all the
+ * same, the check did not finish, so that frame is `unverifiable` too.
  */
 function verificationOf(
   record: RoomRecord,
@@ -326,13 +397,12 @@ function verificationOf(
   if (typeof record.sig !== 'string') return 'unsigned';
   const nonce = exactNonce(record.nonce);
   if (room === undefined || nonce === null) return 'unverifiable';
-  const signed = verifyStoredMessage({
-    room,
-    nonce,
-    text: record.text,
-    did: String(record.from),
-    sig: record.sig,
-  });
+  let signed: boolean;
+  try {
+    signed = verifyPayload(storedMessagePayload(room, nonce, record.text), record.sig, String(record.from));
+  } catch {
+    return 'unverifiable';
+  }
   if (!signed) return 'bad-signature';
   return frame.from === record.from ? 'verified' : 'from-mismatch';
 }

@@ -13,6 +13,7 @@ export type {
   ScanOptions,
   ScanResult,
   RoomRecord,
+  Unverified,
 } from './frames.js';
 
 export { buildThreads, recomputedContractId } from './threads.js';

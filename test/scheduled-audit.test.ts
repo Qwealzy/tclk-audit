@@ -13,7 +13,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { OFFER_ROOM } from '@flop-labs/tclk';
+import { OFFER_ROOM, encodeFrame, generateHashLock, makeAccept, makeOffer, type TclkFrame } from '@flop-labs/tclk';
+import { Identity } from 'technocore-client';
 import { parseExportLine, scanRecords, type RoomRecord } from '../src/frames.js';
 import { bindContracts } from '../src/deal-rooms.js';
 import { slot } from './support/slot.js';
@@ -78,6 +79,7 @@ function lines(path: string): string[] {
 
 interface Run {
   readonly status: number | null;
+  readonly stdout: string;
   readonly stderr: string;
   readonly outDir: string;
 }
@@ -114,7 +116,7 @@ function runScheduledAudit(
       },
     },
   );
-  return { status: run.status, stderr: run.stderr, outDir };
+  return { status: run.status, stdout: run.stdout, stderr: run.stderr, outDir };
 }
 
 beforeAll(() => {
@@ -191,6 +193,95 @@ describe('the scheduled run, offline', () => {
     ]) {
       expect(written).toContain(row);
     }
+  }, 60_000);
+
+  it('applies only verified frames, counts the rest by kind, and flags bad signatures', () => {
+    // Throwaway keys, in memory while the test runs. The board gets an offer,
+    // an unsigned accept for it, and one frame of each other kind. The deal room
+    // of the first contract the fixture binds gets a lock of three kinds.
+    const { room, contract } = firstBinding();
+    const [payer, payee, stranger] = [Identity.create(), Identity.create(), Identity.create()];
+    const offer = makeOffer({
+      from: payer.did,
+      role: 'payer',
+      amount: '5',
+      asset: 'FLOP',
+      lock: 'hash',
+      rails: ['flop-htlc'],
+      claimByMs: Date.parse('2026-09-05T17:30:00Z'),
+      refundAfterMs: Date.parse('2026-09-05T18:00:00Z'),
+      expiresMs: Date.parse('2026-09-05T17:10:00Z'),
+    });
+    const accept = makeAccept(offer, { from: payee.did, statement: generateHashLock().hash });
+    const frame = (f: Record<string, unknown>): string => encodeFrame(f as unknown as TclkFrame);
+    const cancelAs = (from: string): string => frame({ type: 'cancel', from, contract: accept.contract });
+    const lockAs = (from: string): string =>
+      frame({ type: 'lock', from, contract, rail: 'flop-htlc', ref: 'esc-1' });
+
+    let nonce = 1788627060599500000n;
+    /** One stored line. `signer` signs, `from` is what the room reports. */
+    function line(
+      forRoom: string,
+      seq: number,
+      text: string,
+      signer: Identity | null,
+      from: string,
+      withNonce = true,
+    ): string {
+      const n = String(nonce++);
+      const parts = [`"seq":${seq}`, '"ts":"2026-09-05T16:59:00.000000Z"', `"from":${JSON.stringify(from)}`];
+      if (signer === null) return `{${[...parts, `"text":${JSON.stringify(text)}`].join(',')}}`;
+      const signed = signer.signMessage(forRoom, n, text);
+      parts.push(`"text":${JSON.stringify(signed.text)}`);
+      if (withNonce) parts.push(`"nonce":${n}`);
+      parts.push(`"sig":${JSON.stringify(signed.sig)}`);
+      return `{${parts.join(',')}}`;
+    }
+
+    const board = [
+      line(OFFER_ROOM, 900201, encodeFrame(offer), payer, payer.did),
+      line(OFFER_ROOM, 900202, encodeFrame(accept), null, payee.did),
+      line(OFFER_ROOM, 900203, cancelAs(payer.did), stranger, stranger.did),
+      line(OFFER_ROOM, 900204, cancelAs(payer.did), stranger, payer.did),
+      line(OFFER_ROOM, 900205, cancelAs(payer.did), payer, payer.did, false),
+    ];
+    const dealPath = join(scratch, 'signatures-deal.jsonl');
+    writeFileSync(
+      dealPath,
+      [
+        line(room, 1, lockAs(payer.did), null, payer.did),
+        line(room, 2, lockAs(payer.did), stranger, stranger.did),
+        line(room, 3, lockAs(payer.did), stranger, payer.did),
+      ].join(LF) + LF,
+    );
+
+    const run = runScheduledAudit('signatures', [...fixture, ...board], { [room]: dealPath });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stderr).toBe('');
+    expect(readdirSync(run.outDir)).toEqual([STAMP + '.md']);
+
+    const written = readFileSync(join(run.outDir, STAMP + '.md'), 'utf8');
+    for (const row of [
+      '| Decoded | 1183 |',
+      '| Signature verifies, `from` is the signer | 1179 | 0 | applied |',
+      '| Signature verifies, `from` names another key | 1 | 1 | left out. It breaks a MUST in SPEC.md section 2 |',
+      '| Signature does not verify | 1 | 1 | left out |',
+      '| Unsigned | 1 | 1 | left out. Not re-verifiable, which is not the same as invalid |',
+      "| Could not be checked | 1 | 0 | left out. A limit of this tool, not the sender's |",
+      // The unsigned accept binds nothing, so the count is the fixture's own.
+      '| Contracts accepted | 258 |',
+      '| Frames decoded in deal rooms | 3 |',
+    ]) {
+      expect(written).toContain(row);
+    }
+    // Nothing in the deal room moved its contract.
+    expect(written).toMatch(/with the frames in that room applied:\n\n\| status \| contracts \|\n\|---\|---\|\n\| accepted \| 258 \|\n/);
+
+    const warnings = run.stdout.split(LF).filter((l) => l.startsWith('::warning::'));
+    expect(warnings).toEqual([
+      '::warning::scheduled-audit: 2 frame(s) carry a signature that does not verify, and were left out. ' +
+        'A sudden rise more likely means a fault in this tool than many senders at once.',
+    ]);
   }, 60_000);
 
   /**

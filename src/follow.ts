@@ -41,6 +41,11 @@ import {
  * newest accepted contracts in the window, through `/export`. A deal room is
  * small and has no long-poll of its own here. Re-reading it whole is one read,
  * and it cannot leave a gap.
+ *
+ * Every read passes its room to `scanRecords`, and technocore-client keeps each
+ * nonce as digits. So a signed frame can be checked, and only a verified one
+ * joins the window. A frame the signature check leaves out is reported with the
+ * rejections and folded nowhere.
  */
 
 export interface FollowOptions {
@@ -100,7 +105,8 @@ export interface FollowPass {
   readonly arrived: readonly FrameRecord[];
   /**
    * The audit over the board's rolling window, not just the arrivals. A frame
-   * the spec puts in a deal room is left out of it.
+   * the spec puts in a deal room is left out of it, and so is a frame whose
+   * signature is not verified.
    */
   readonly report: AuditReport;
   /** Known decoder gaps in the board's window. They are not in `report`. */
@@ -268,5 +274,12 @@ export class Follower {
       this.#rejections = this.#rejections.filter((r) => r.seq >= oldest);
       this.#knownGaps = this.#knownGaps.filter((r) => r.seq >= oldest);
     }
+    // The cutoff above is the oldest frame's seq, and the signature check moved
+    // frames out of `#frames` and into `#rejections`. In a room where little
+    // verifies, `#frames` fills slowly and the cutoff barely moves, and with no
+    // frame at all there is no cutoff. So each list is capped by count too, and
+    // the newest are the ones kept.
+    this.#rejections = this.#rejections.slice(-this.#windowFrames);
+    this.#knownGaps = this.#knownGaps.slice(-this.#windowFrames);
   }
 }
