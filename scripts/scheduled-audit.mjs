@@ -161,20 +161,30 @@ if (records.length === 0) fail(`export of /r/${ROOM} contained no parseable reco
 
 const scan = scanRecords(records, { room: ROOM });
 
+// A rejection is the decoder's, or the shape check's after the decoder had
+// accepted the line (src/frames.ts). Both are lines this run could not use.
+// They are reported apart, since only the first are the decoder's.
+const byDecoder = (rejections) => rejections.filter((r) => r.refusedBy === 'decoder');
+const byShapeCheck = (rejections) => rejections.filter((r) => r.refusedBy === 'shape-check');
+const shapeRefused = byShapeCheck(scan.rejections).length;
+
 // Three ways a run can produce nothing useful. Each fails before anything is
 // written. A missing file for a day is a visible gap. A file full of zeroes is
 // a lie that accumulates.
 
 if (scan.frames.length === 0) {
   fail(
-    `no frames decoded from ${records.length} records: ` +
-      `${scan.rejections.length} rejected, ${scan.knownGaps.length} known decoder gaps, ` +
+    `no usable frames in ${records.length} records: ` +
+      `${scan.rejections.length - shapeRefused} rejected by the decoder, ` +
+      `${shapeRefused} refused by the shape check, ${scan.knownGaps.length} known decoder gaps, ` +
       `${scan.nonFrameCount} not tclk lines`,
   );
 }
 
 // A known decoder gap is still a line the installed decoder could not read,
-// so it counts toward the ceiling the same as any other refusal.
+// so it counts toward the ceiling the same as any other refusal. So does a
+// line the shape check refused. If the decoder and the shape check ever
+// disagree about most of the traffic, this run stops instead of hiding it.
 const refused = [...scan.rejections, ...scan.knownGaps];
 const tclkLines = scan.frames.length + refused.length;
 const rejectionRate = tclkLines === 0 ? 1 : refused.length / tclkLines;
@@ -198,8 +208,11 @@ if (rejectionRate > REJECTION_RATE_CEILING) {
     `decode rejection rate ${(rejectionRate * 100).toFixed(1)}% exceeds the ` +
       `${(REJECTION_RATE_CEILING * 100).toFixed(0)}% ceiling. ` +
       `${refused.length} of ${tclkLines} tclk lines in the export failed the installed ` +
-      `decoder, @flop-labs/tclk ${installedDecoderVersion()}, so no findings file was written. ` +
-      `Top reasons: ${top}`,
+      `decoder, @flop-labs/tclk ${installedDecoderVersion()}` +
+      (shapeRefused === 0
+        ? ''
+        : `, or passed it and failed this reader's shape check (${shapeRefused} of them)`) +
+      `, so no findings file was written. Top reasons: ${top}`,
   );
 }
 
@@ -241,7 +254,7 @@ const anomalies = tally(
   report.findings.filter((f) => f.severity === 'anomaly'),
   (f) => f.detail.replace(/\bseq \d+\b/g, 'seq N'),
 );
-const rejections = tally(scan.rejections, (r) => r.reason);
+const rejections = tally(byDecoder(scan.rejections), (r) => r.reason);
 
 // What checking each frame's signature and sender found. Reported only. The
 // audit above folded every decoded frame, whatever this says.
@@ -250,10 +263,18 @@ const verificationCount = (kind) => verificationCounts.get(kind) ?? 0;
 
 const wrongRoomOnBoard = routed.wrongRoom.filter((w) => w.room === ROOM).length;
 const dealRejections = tally(
-  dealScans.flatMap((s) => s.rejections),
+  dealScans.flatMap((s) => byDecoder(s.rejections)),
   (r) => r.reason,
 );
-const dealRejectionCount = dealScans.reduce((n, s) => n + s.rejections.length, 0);
+const dealRejectionCount = dealScans.reduce((n, s) => n + byDecoder(s.rejections).length, 0);
+const dealShapeRefused = dealScans.reduce((n, s) => n + byShapeCheck(s.rejections).length, 0);
+const shapeRejections = tally(
+  [
+    ...byShapeCheck(scan.rejections).map((r) => ({ reason: r.reason, where: `\`${ROOM}\`` })),
+    ...dealScans.flatMap((s) => byShapeCheck(s.rejections).map((r) => ({ reason: r.reason, where: 'deal rooms' }))),
+  ],
+  (r) => `| \`${r.reason}\` | ${r.where} |`,
+);
 const knownGaps = tally(
   [
     ...scan.knownGaps.map((g) => ({ gap: g.gap, where: `\`${ROOM}\`` })),
@@ -308,7 +329,8 @@ const lines = [
   '| | |',
   '|---|---|',
   `| Decoded | ${scan.frames.length} |`,
-  `| Rejected by the decoder | ${scan.rejections.length} |`,
+  `| Rejected by the decoder | ${scan.rejections.length - shapeRefused} |`,
+  `| Refused by the shape check after decoding | ${shapeRefused} |`,
   `| Known decoder gaps | ${scan.knownGaps.length} |`,
   `| Lines that were not frames | ${scan.nonFrameCount} |`,
   '',
@@ -359,6 +381,7 @@ const lines = [
   `| Deal rooms read | ${reads.scans.size} of ${dealRooms.length} |`,
   `| Frames decoded in deal rooms | ${dealScans.reduce((n, s) => n + s.frames.length, 0)} |`,
   `| Rejected by the decoder in deal rooms | ${dealRejectionCount} |`,
+  `| Refused by the shape check in deal rooms | ${dealShapeRefused} |`,
   `| Known decoder gaps in deal rooms | ${dealScans.reduce((n, s) => n + s.knownGaps.length, 0)} |`,
   `| Frames found in \`${ROOM}\` that belong in a deal room | ${wrongRoomOnBoard} |`,
   `| Offers and accepts found in a deal room | ${routed.wrongRoom.length - wrongRoomOnBoard} |`,
@@ -417,6 +440,23 @@ if (dealRejections.length > 0) {
     '| count | reason |',
     '|---|---|',
     ...dealRejections.map(([reason, count]) => `| ${count} | \`${reason}\` |`),
+    '',
+  );
+}
+
+if (shapeRejections.length > 0) {
+  lines.push(
+    '## Shape check rejections',
+    '',
+    `Frames the installed decoder, \`@flop-labs/tclk\` ${installedDecoderVersion()}, accepted and this tool then`,
+    "refused. That decoder looks a frame's type up by its string form, so a type such as `[\"lock\"]` passes as",
+    "a lock and skips the checks on a lock's own fields. It reads a receipt's `outcome` the same way. So each",
+    'decoded frame is checked against the JavaScript types tclk declares. A frame that fails is counted here',
+    'and applied nowhere.',
+    '',
+    '| count | reason | room |',
+    '|---|---|---|',
+    ...shapeRejections.map(([row, count]) => `| ${count} ${row}`),
     '',
   );
 }

@@ -7,6 +7,7 @@ import {
   type AcceptFrame,
   type ContractState,
   type OfferFrame,
+  type StepResult,
 } from '@flop-labs/tclk';
 import type { FrameRecord } from './frames.js';
 
@@ -115,8 +116,11 @@ function acceptTaken(
     if (record.frame.type === 'offer') continue;
     if (!Number.isFinite(record.tsMs)) continue;
     if (record.frame.type === 'accept' && !recomputes.has(record)) continue;
-    const step = applyFrame(state, record.frame, record.tsMs);
-    if (!step.ok) continue;
+    // applyFrame can return nothing for a frame whose type matches none of its
+    // cases. scanRecords refuses such a frame first. Here, as in the fold in
+    // audit.ts, no result counts as a refusal.
+    const step: StepResult | undefined = applyFrame(state, record.frame, record.tsMs);
+    if (step?.ok !== true) continue;
     if (record.frame.type === 'accept') return record;
     state = step.state;
     if (TCLK_TERMINAL_STATUSES.has(state.status)) return null;

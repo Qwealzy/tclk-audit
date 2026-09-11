@@ -18,6 +18,14 @@ import { parseRoomPage, verifyStoredMessage } from 'technocore-client';
  * an auditable record, keeping the transport facts (seq, ts, sender, whether the
  * record is re-verifiable) beside the decoded frame.
  *
+ * It also checks what the decoder returns, because 0.1.0 does coerce in two
+ * places. PROBED 2026-09-11: it looks a frame's `type` up by its string form,
+ * so `["lock"]` decodes as a lock and skips every check on a lock's own
+ * fields. It reads a receipt's `outcome` by its string form too. So each
+ * decoded frame goes through `shapeRefusal`, which compares it with the
+ * JavaScript types tclk declares. That check parses nothing and knows no
+ * value rule. Every rule about values is still the decoder's.
+ *
  * MEASURED 2026-09-05 against the full retained `tclk-offers` ring, 12,372
  * records: 12,149 frames decoded, 141 lines were not tclk at all, and 82 were
  * rejected. Every rejection is a schema violation the spec requires
@@ -91,16 +99,25 @@ export type FrameVerification =
   | 'unsigned'
   | 'unverifiable';
 
-/** A line that looked like a frame and was refused by the normative decoder. */
+/**
+ * A line that looked like a frame and was refused, by the normative decoder or
+ * by the shape check after it.
+ */
 export interface FrameRejection {
   readonly seq: bigint;
   readonly ts: string;
   /** The sender, after `sanitizeReason`. See `FrameRecord.from`. */
   readonly from: string;
   /**
-   * The decoder's refusal, rebuilt by `rebuildRefusal`. It keeps the decoder's
-   * fixed text, and every part a stranger chose appears only as
-   * `<N bytes, sha256:HEX>`. Then it goes through `sanitizeReason`.
+   * Who refused the line. `decoder` is 0.1.0's `decodeFrame`. `shape-check` is
+   * this module, after the decoder had accepted the line. See `shapeRefusal`.
+   */
+  readonly refusedBy: 'decoder' | 'shape-check';
+  /**
+   * The refusal. A decoder refusal is rebuilt by `rebuildRefusal`. It keeps the
+   * decoder's fixed text, and every part a stranger chose appears only as
+   * `<N bytes, sha256:HEX>`. A shape refusal is this module's own text, built
+   * the same way by `shapeRefusal`. Either then goes through `sanitizeReason`.
    */
   readonly reason: string;
 }
@@ -134,7 +151,11 @@ export interface KnownDecoderGap extends FrameRejection {
 
 export interface ScanResult {
   readonly frames: readonly FrameRecord[];
-  /** Lines the decoder refused, apart from known decoder gaps. */
+  /**
+   * Lines the decoder refused, apart from known decoder gaps, and lines it
+   * accepted that the shape check then refused. `refusedBy` tells them apart.
+   * A line here is never in `frames`.
+   */
   readonly rejections: readonly FrameRejection[];
   /**
    * Lines the decoder refused for a known decoder gap. Kept apart from
@@ -256,9 +277,24 @@ export function scanRecords(
     const frame = tryDecodeFrame(record.text);
     if (frame === null) {
       const { reason, gap } = rejectionReason(record.text);
-      const rejection = { seq: BigInt(record.seq), ts: record.ts, from, reason };
+      const rejection = { seq: BigInt(record.seq), ts: record.ts, from, refusedBy: 'decoder' as const, reason };
       if (gap === undefined) rejections.push(rejection);
       else knownGaps.push({ ...rejection, gap });
+      continue;
+    }
+
+    // The decoder accepted the line. Nothing uses the frame until its shape
+    // matches the types tclk declares. A frame that fails never reaches the
+    // state machine.
+    const shape = shapeRefusal(frame);
+    if (shape !== null) {
+      rejections.push({
+        seq: BigInt(record.seq),
+        ts: record.ts,
+        from,
+        refusedBy: 'shape-check',
+        reason: sanitizeReason(shape),
+      });
       continue;
     }
 
@@ -347,6 +383,179 @@ const UTF8 = new TextEncoder();
 function hidden(text: string): string {
   const bytes = UTF8.encode(text);
   return `<${bytes.length} bytes, sha256:${createHash('sha256').update(bytes).digest('hex')}>`;
+}
+
+/**
+ * A value a stranger chose, of any type, as `hidden` over its JSON text. So
+ * `["lock"]` is hashed as the 8 bytes `["lock"]`. A value with no JSON text
+ * gets fixed text instead.
+ */
+function hiddenJson(value: unknown): string {
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    json = undefined;
+  }
+  return json === undefined ? '<no JSON form>' : hidden(json);
+}
+
+/** `any` is a key the decoder lets through with any value. Nothing here reads it. */
+type FieldKind = 'string' | 'number' | 'strings' | 'job' | 'presig' | 'any';
+
+interface Field {
+  readonly kind: FieldKind;
+  readonly optional: boolean;
+}
+
+type Shape = ReadonlyMap<string, Field>;
+
+/** A shape from `{ name: kind }`. A name that ends in `?` is optional. */
+function shape(spec: Readonly<Record<string, FieldKind>>): Shape {
+  return new Map(
+    Object.entries(spec).map(([name, kind]): [string, Field] =>
+      name.endsWith('?') ? [name.slice(0, -1), { kind, optional: true }] : [name, { kind, optional: false }],
+    ),
+  );
+}
+
+/**
+ * The fields of each frame type 0.1.0 decodes, with the JavaScript type of
+ * each.
+ *
+ * STATED in 0.1.0's dist/frames.d.ts, in the `TclkFrame` union and the
+ * interfaces it joins, and in dist/frames.js, in the `KEYS` table (lines 122
+ * to 153). For the seven frame types the two agree on every field and on which
+ * are optional. The thirteen names in `MALFORMED_NAMES` are only the string
+ * fields the decoder also matches against a pattern. This table has every
+ * field.
+ *
+ * A `Map` and a `typeof` check, so no coercion happens here and no name an
+ * object inherits, such as `constructor`, can match.
+ */
+const FRAME_SHAPES: ReadonlyMap<string, Shape> = new Map([
+  [
+    'offer',
+    shape({
+      type: 'string', from: 'string', role: 'string', amount: 'string', asset: 'string',
+      lock: 'string', rails: 'strings', claimByMs: 'number', refundAfterMs: 'number',
+      expiresMs: 'number', 'paymentKey?': 'string', 'job?': 'job', nonce: 'string', id: 'string',
+    }),
+  ],
+  [
+    'accept',
+    shape({
+      type: 'string', from: 'string', ref: 'string', statement: 'string', contract: 'string',
+      'paymentKey?': 'string', nonce: 'string',
+    }),
+  ],
+  ['lock', shape({ type: 'string', from: 'string', contract: 'string', rail: 'string', ref: 'string', 'presig?': 'presig' })],
+  ['reveal', shape({ type: 'string', from: 'string', contract: 'string', secret: 'string' })],
+  ['refund', shape({ type: 'string', from: 'string', contract: 'string', 'reason?': 'string' })],
+  ['cancel', shape({ type: 'string', from: 'string', contract: 'string', 'reason?': 'string' })],
+  [
+    'receipt',
+    shape({ type: 'string', from: 'string', contract: 'string', outcome: 'string', 'rail?': 'string', 'ref?': 'string' }),
+  ],
+]);
+
+/**
+ * `JobRef` and `PresigRef` in dist/frames.d.ts, and one key they do not
+ * declare. STATED in dist/frames.js (lines 61 and 219): the decoder checks the
+ * keys of a job and of a presig against a set that includes `type`, after it
+ * has set `type` in its own copy. So a `type` key inside either passes with any
+ * value. This table allows it too, so it refuses nothing the decoder accepts
+ * there.
+ */
+const NESTED_SHAPES: { readonly job: Shape; readonly presig: Shape } = {
+  job: shape({ 'type?': 'any', proto: 'string', id: 'string', 'context?': 'string' }),
+  presig: shape({ 'type?': 'any', nonce: 'string', s: 'string' }),
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Why a frame the decoder accepted does not have the shape tclk declares, or
+ * null when it does.
+ *
+ * STATED in 0.1.0's dist/frames.js. `validateFrame` finds a type's fields with
+ * `KEYS[type]` (line 166). That is a plain object, so an array type is looked
+ * up by its string form, and `["lock"]` or `[["lock"]]` finds the lock entry.
+ * The field checks then sit in `switch (type)` (line 171), which compares with
+ * `===` and has no default. So such a frame passes with only its key names and
+ * `from` checked, and any value in its other fields. A receipt's `outcome` is
+ * checked as `String(frame.outcome)` (line 239), so `["claimed"]` passes too.
+ * STATED in dist/machine.js: `applyFrame` switches on `frame.type` the same way
+ * (line 48) and returns nothing when no case matches. PROBED 2026-09-11: one
+ * such frame in a deal room, or on the board where `acceptTaken` reads it,
+ * threw a TypeError in the fold and stopped the scheduled run before it wrote
+ * anything.
+ *
+ * The check covers every type and every field. Each key must be in its table,
+ * each required field present, and each field of its JavaScript type. It
+ * checks types only. A string that breaks a pattern is still the decoder's to
+ * refuse. INFERRED from dist/frames.js: on a frame the decoder accepts, this
+ * refuses only a type or an outcome that is not a string. The decoder has
+ * already checked everything else the same way.
+ *
+ * Its text is built like `rebuildRefusal`'s. Field names and frame types come
+ * from this module's tables. Anything a stranger chose appears only as a
+ * length and a hash, a non-string over its JSON text. It never throws. A check
+ * that fails for any other reason refuses the frame with fixed text.
+ */
+export function shapeRefusal(frame: unknown): string | null {
+  const prefix = 'tclk-audit: ';
+  try {
+    if (!isRecord(frame)) return `${prefix}frame must be an object`;
+    const type = frame['type'];
+    if (typeof type !== 'string') return `${prefix}type must be a string: ${hiddenJson(type)}`;
+    const fields = FRAME_SHAPES.get(type);
+    if (fields === undefined) return `${prefix}type is not a frame type: ${hidden(type)}`;
+    const refusal = recordRefusal(frame, fields, type);
+    return refusal === null ? null : prefix + refusal;
+  } catch {
+    return `${prefix}frame shape could not be checked`;
+  }
+}
+
+/** The first way `record` differs from `fields`, or null. `owner` names it in the text. */
+function recordRefusal(record: Record<string, unknown>, fields: Shape, owner: string): string | null {
+  for (const key of Object.keys(record)) {
+    if (!fields.has(key)) return `unknown field on ${owner}: ${hidden(key)}`;
+  }
+  for (const [name, field] of fields) {
+    if (!Object.hasOwn(record, name)) {
+      if (field.optional) continue;
+      return `missing field on ${owner}: ${name}`;
+    }
+    const value = record[name];
+    const path = `${owner}.${name}`;
+    switch (field.kind) {
+      case 'string':
+        if (typeof value !== 'string') return `${path} must be a string: ${hiddenJson(value)}`;
+        break;
+      case 'number':
+        if (typeof value !== 'number') return `${path} must be a number: ${hiddenJson(value)}`;
+        break;
+      case 'strings':
+        if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+          return `${path} must be an array of strings: ${hiddenJson(value)}`;
+        }
+        break;
+      case 'job':
+      case 'presig': {
+        if (!isRecord(value)) return `${path} must be an object: ${hiddenJson(value)}`;
+        const inner = recordRefusal(value, NESTED_SHAPES[field.kind], path);
+        if (inner !== null) return inner;
+        break;
+      }
+      case 'any':
+        break;
+    }
+  }
+  return null;
 }
 
 // The closed lists the decoder draws its own words from, copied from 0.1.0's

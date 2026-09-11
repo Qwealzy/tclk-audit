@@ -36,8 +36,8 @@ at one.
 |---|---|
 | Generated | 2026-09-11T00:00:00.000Z |
 | Room | `tclk-offers` |
-| Seq range | 176654..900125 |
-| Records exported | 1205 |
+| Seq range | 176654..900128 |
+| Records exported | 1208 |
 | Traffic span | 0.2 hours |
 
 The room is a ring, so one run sees only what is retained, about 0.2 hours here, roughly 1% of a day. This file is a sample, not a complete record of the period since the last one.
@@ -46,8 +46,9 @@ The room is a ring, so one run sees only what is retained, about 0.2 hours here,
 
 | | |
 |---|---|
-| Decoded | 1178 |
+| Decoded | 1180 |
 | Rejected by the decoder | 10 |
+| Refused by the shape check after decoding | 1 |
 | Known decoder gaps | 0 |
 | Lines that were not frames | 17 |
 
@@ -59,7 +60,7 @@ calls "data, not a commitment". This run reports the difference and does not act
 
 | | |
 |---|---|
-| Signature verifies, `from` is the signer | 1178 |
+| Signature verifies, `from` is the signer | 1180 |
 | Signature verifies, `from` names another key | 0 |
 | Signature does not verify | 0 |
 | Unsigned | 0 |
@@ -71,9 +72,9 @@ These count only the frames that belong in `tclk-offers`. Deal rooms, below, cov
 
 | | |
 |---|---|
-| Threads reconstructed | 384 |
+| Threads reconstructed | 385 |
 | Transitions accepted | 258 |
-| Root-cause refusals | 13 |
+| Root-cause refusals | 14 |
 | Downstream consequences | 0 |
 
 Status at the end of the window:
@@ -81,7 +82,7 @@ Status at the end of the window:
 | status | contracts |
 |---|---|
 | accepted | 258 |
-| proposed | 118 |
+| proposed | 119 |
 | unopened | 8 |
 
 ## Deal rooms
@@ -98,6 +99,7 @@ nowhere.
 | Deal rooms read | 258 of 258 |
 | Frames decoded in deal rooms | 2 |
 | Rejected by the decoder in deal rooms | 1 |
+| Refused by the shape check in deal rooms | 4 |
 | Known decoder gaps in deal rooms | 3 |
 | Frames found in `tclk-offers` that belong in a deal room | 340 |
 | Offers and accepts found in a deal room | 1 |
@@ -118,6 +120,7 @@ always a root. A status refusal is one when no root is open on its contract in t
 |---|---|
 | 12 | accept refused: accept in status accepted |
 | 1 | accept refused: contract id mismatch |
+| 1 | accept refused: offer has expired |
 
 ## Decoder rejections
 
@@ -138,6 +141,22 @@ a missing field or a malformed value is rejected rather than coerced.
 | count | reason |
 |---|---|
 | 1 | `tclk: unknown field on lock: <3 bytes, sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae>` |
+
+## Shape check rejections
+
+Frames the installed decoder, `@flop-labs/tclk` 0.1.0, accepted and this tool then
+refused. That decoder looks a frame's type up by its string form, so a type such as `["lock"]` passes as
+a lock and skips the checks on a lock's own fields. It reads a receipt's `outcome` the same way. So each
+decoded frame is checked against the JavaScript types tclk declares. A frame that fails is counted here
+and applied nowhere.
+
+| count | reason | room |
+|---|---|---|
+| 1 | `tclk-audit: type must be a string: <8 bytes, sha256:0ae7f2076b489147b5311577ef675e95cbbcabb2b62f1c5f4c6c5841d424d6d6>` | `tclk-offers` |
+| 1 | `tclk-audit: type must be a string: <8 bytes, sha256:0ae7f2076b489147b5311577ef675e95cbbcabb2b62f1c5f4c6c5841d424d6d6>` | deal rooms |
+| 1 | `tclk-audit: type must be a string: <12 bytes, sha256:cfcd158b97b1edea6a719247eab379ad35aba1d39121b9bfba8f279986aa3686>` | deal rooms |
+| 1 | `tclk-audit: type must be a string: <10 bytes, sha256:83de6c23768a3f3d45062c2222faf1b857db3f7d181fe29323cb7f73300ca16a>` | deal rooms |
+| 1 | `tclk-audit: receipt.outcome must be a string: <11 bytes, sha256:4091eb069c1de1430f4f0bbfce13735b84e59c21bccf31903f402a87996bd9d8>` | deal rooms |
 
 ## Known decoder gaps
 

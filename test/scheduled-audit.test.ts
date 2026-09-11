@@ -35,15 +35,25 @@ import { slot } from './support/slot.js';
  * two carry the field names that broke the findings table and wrote runner
  * commands before rejection reasons were encoded. The other three put the
  * attack in a field value, in the frame type, and in a field name of over
- * 3,000 characters. The expected file was recorded from the same run. When the
- * script or its banner changes on purpose, record it again and check the diff.
+ * 3,000 characters. test/fixtures/crafted-shapes.jsonl adds three board
+ * records. An offer, an accept that comes after the offer expired, and a
+ * stranger's lock whose type is `["lock"]`, naming that accept's contract. The
+ * expected file was recorded from the same run. When the script or its banner
+ * changes on purpose, record it again and check the diff.
  *
  * Every deal room exports as empty except one. test/fixtures/
- * deal-room-synthetic.jsonl is six records in the deal room of the first
+ * deal-room-synthetic.jsonl is ten records in the deal room of the first
  * contract the fixture binds. They were signed once by throwaway keys that were
  * never written down. Three are frames 0.1.0 refuses for a known decoder gap.
  * Then come an accept in the wrong room, a lock from a key that is not the
- * payer's, and a lock with an unknown field that the decoder rejects.
+ * payer's, and a lock with an unknown field that the decoder rejects. The last
+ * four are frames 0.1.0 decodes in a shape tclk does not declare. Their types
+ * are `["lock"]`, `[["reveal"]]` and `["cancel"]`, and the fourth is a receipt
+ * whose outcome is `["claimed"]`.
+ *
+ * Before the shape check, the stranger's lock on the board stopped this run
+ * with a TypeError, and so did each of the first three in the deal room on its
+ * own. The run wrote nothing, and printed no `::error::` line.
  */
 
 const LF = String.fromCharCode(10);
@@ -132,6 +142,7 @@ afterAll(() => {
 describe('the scheduled run, offline', () => {
   const fixture = lines(at('test', 'fixtures', 'tclk-slice.jsonl'));
   const crafted = lines(at('test', 'fixtures', 'crafted-rejections.jsonl'));
+  const shapes = lines(at('test', 'fixtures', 'crafted-shapes.jsonl'));
   const synthetic = at('test', 'fixtures', 'deal-room-synthetic.jsonl');
 
   /** The deal room of the first contract the fixture binds, and that contract. */
@@ -147,7 +158,7 @@ describe('the scheduled run, offline', () => {
     // The synthetic records name the contract they were made for. If the
     // binding moves, this fails here instead of serving an unread file.
     expect(lines(synthetic).some((l) => l.includes(contract.slice(2)))).toBe(true);
-    const run = runScheduledAudit('passes', [...fixture, ...crafted], { [room]: synthetic });
+    const run = runScheduledAudit('passes', [...fixture, ...crafted, ...shapes], { [room]: synthetic });
     expect(run.status, run.stderr).toBe(0);
     expect(readdirSync(run.outDir)).toEqual([STAMP + '.md']);
 
@@ -156,6 +167,30 @@ describe('the scheduled run, offline', () => {
       .split(CR + LF)
       .join(LF);
     expect(written).toBe(expected);
+  }, 60_000);
+
+  it('keeps going past decoded frames of the wrong shape, and writes its file', () => {
+    const { room } = firstBinding();
+    const run = runScheduledAudit('shapes', [...fixture, ...shapes], { [room]: synthetic });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stderr).toBe('');
+    expect(readdirSync(run.outDir)).toEqual([STAMP + '.md']);
+
+    const written = readFileSync(join(run.outDir, STAMP + '.md'), 'utf8');
+    expect(written).toContain('| Refused by the shape check after decoding | 1 |');
+    expect(written).toContain('| Refused by the shape check in deal rooms | 4 |');
+    // Each type and outcome appears only as the length and hash of its JSON.
+    const typeRow = (json: string, where: string) =>
+      `| 1 | \`tclk-audit: type must be a string: ${slot(json)}\` | ${where} |`;
+    for (const row of [
+      typeRow('["lock"]', '`tclk-offers`'),
+      typeRow('["lock"]', 'deal rooms'),
+      typeRow('[["reveal"]]', 'deal rooms'),
+      typeRow('["cancel"]', 'deal rooms'),
+      `| 1 | \`tclk-audit: receipt.outcome must be a string: ${slot('["claimed"]')}\` | deal rooms |`,
+    ]) {
+      expect(written).toContain(row);
+    }
   }, 60_000);
 
   /**

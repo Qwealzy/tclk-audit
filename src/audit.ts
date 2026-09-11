@@ -1,4 +1,10 @@
-import { openContract, applyFrame, type ContractState, type TclkStatus } from '@flop-labs/tclk';
+import {
+  openContract,
+  applyFrame,
+  type ContractState,
+  type StepResult,
+  type TclkStatus,
+} from '@flop-labs/tclk';
 import type { FrameRecord, FrameRejection } from './frames.js';
 import type { ContractThread, ThreadIndex } from './threads.js';
 
@@ -30,6 +36,11 @@ export type Severity = 'info' | 'notice' | 'anomaly';
 export type FindingCode =
   /** A line that looked like a frame and failed the normative decoder. */
   | 'frame-rejected'
+  /**
+   * A line the decoder accepted and the shape check in frames.ts refused. Its
+   * frame never reached the state machine.
+   */
+  | 'frame-rejected-shape'
   /**
    * The machine refused a transition, and no open root in its contract's chain
    * explains it. Severity anomaly, counted in `transitionsRejected`.
@@ -157,12 +168,12 @@ export function audit(
 
   for (const rejection of rejections) {
     findings.push({
-      code: 'frame-rejected',
+      code: rejection.refusedBy === 'shape-check' ? 'frame-rejected-shape' : 'frame-rejected',
       severity: 'notice',
       subject: `seq ${rejection.seq}`,
       seq: rejection.seq,
-      // The refusal as scanRecords rebuilt it. The decoder's fixed text is
-      // kept, and every part a stranger chose is shown as its length and hash.
+      // The refusal as scanRecords built it. Only fixed text is kept, and every
+      // part a stranger chose is shown as its length and hash.
       detail: `${rejection.reason} (from ${rejection.from})`,
     });
   }
@@ -282,23 +293,28 @@ export function audit(
       }
 
       const contract = record.frame.contract;
-      const step = applyFrame(state, record.frame, record.tsMs);
-      if (step.ok) {
+      // STATED in 0.1.0's dist/machine.js (line 48): applyFrame returns nothing
+      // when a frame's type matches none of its cases. scanRecords refuses such
+      // a frame before it gets here. This is a second guard, in case one
+      // arrives some other way. No result is a refusal, and the state stays.
+      const step: StepResult | undefined = applyFrame(state, record.frame, record.tsMs);
+      if (step?.ok === true) {
         accepted += 1;
         state = step.state;
         continue;
       }
+      const reason = step === undefined ? 'the state machine returned no result' : step.reason;
 
       const latest = roots.get(contract);
       const root = latest !== undefined && latest.status === state.status ? latest.seq : undefined;
-      if (root !== undefined && isStatusRefusal(step.reason)) {
+      if (root !== undefined && isStatusRefusal(reason)) {
         blocked += 1;
         threadFindings.push({
           code: 'transition-blocked',
           severity: 'info',
           subject: thread.key,
           seq: record.seq,
-          detail: `${record.frame.type} refused: ${step.reason ?? 'no reason given'}`,
+          detail: `${record.frame.type} refused: ${reason ?? 'no reason given'}`,
           causedBy: root,
         });
       } else {
@@ -309,7 +325,7 @@ export function audit(
           severity: 'anomaly',
           subject: thread.key,
           seq: record.seq,
-          detail: `${record.frame.type} refused: ${step.reason ?? 'no reason given'}`,
+          detail: `${record.frame.type} refused: ${reason ?? 'no reason given'}`,
         });
       }
     }
