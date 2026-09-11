@@ -231,6 +231,30 @@ describe('a transition that moves the status breaks the chain', () => {
     expect(report.transitionsRejected).toBe(2);
     expect(report.transitionsBlocked).toBe(1);
   });
+
+  it('breaks it when a frame naming another contract moves the status', () => {
+    // The machine keeps one status for the offer. The offerer's cancel names
+    // the second contract and still moves that status from proposed to
+    // cancelled, so the next status refusal on the first contract is a new root.
+    const d = newDeal();
+    const late = Identity.create();
+    const other = makeAccept(d.offer, { from: late.did, statement: d.accept.statement });
+    const report = fold([
+      post(d.payer, OFFER_ROOM, 1, 0, encodeFrame(d.offer)),
+      post(d.payer, OFFER_ROOM, 2, 1, lockBy(d.payer, d.contract)),
+      post(d.payer, OFFER_ROOM, 3, 2, line({ type: 'cancel', from: d.payer.did, contract: other.contract })),
+      post(d.payer, OFFER_ROOM, 4, 3, lockBy(d.payer, d.contract, 'esc-2')),
+      post(d.payee, OFFER_ROOM, 5, 4, encodeFrame(d.accept)),
+      post(late, OFFER_ROOM, 6, 5, encodeFrame(other)),
+    ]);
+    expect(refusals(report)).toEqual([
+      anomaly(2n, 'lock refused: lock in status proposed'),
+      anomaly(4n, 'lock refused: lock in status cancelled'),
+      consequence(5n, 'accept refused: accept in status cancelled', 4n),
+      anomaly(6n, 'accept refused: accept in status cancelled'),
+    ]);
+    expect(report.byStatus).toEqual({ cancelled: 1 });
+  });
 });
 
 describe('each contract carries its own chain', () => {

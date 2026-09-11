@@ -228,7 +228,11 @@ export function audit(
      *     carries no `causedBy`. When its contract has no open root, it becomes
      *     one.
      *   - A status refusal is a consequence of its contract's open root, when
-     *     there is one. The root stays open until that contract's status moves.
+     *     there is one.
+     *   - A root remembers the status it was opened in, and stays open only
+     *     while the machine is still in that status. The machine keeps one
+     *     status for the offer, so a transition that moves it closes every
+     *     root, whichever contract its frame named. A receipt moves nothing.
      *   - A status refusal with no open root is an anomaly and opens a root.
      *     So a status refusal after a transition that moved the status starts
      *     a new chain instead of joining the old one.
@@ -237,7 +241,8 @@ export function audit(
      * receipt, the status is checked before anything else. A status refusal
      * can therefore hide another fault in the same frame. It is still chained.
      */
-    const openRoots = new Map<string, bigint>();
+    /** Each contract's latest root, and the status the machine was in then. */
+    const roots = new Map<string, { readonly seq: bigint; readonly status: TclkStatus }>();
 
     for (const record of thread.frames) {
       if (record.frame.type === 'offer') continue;
@@ -257,12 +262,12 @@ export function audit(
       const step = applyFrame(state, record.frame, record.tsMs);
       if (step.ok) {
         accepted += 1;
-        if (step.state.status !== state.status) openRoots.delete(contract);
         state = step.state;
         continue;
       }
 
-      const root = openRoots.get(contract);
+      const latest = roots.get(contract);
+      const root = latest !== undefined && latest.status === state.status ? latest.seq : undefined;
       if (root !== undefined && isStatusRefusal(step.reason)) {
         blocked += 1;
         threadFindings.push({
@@ -275,7 +280,7 @@ export function audit(
         });
       } else {
         rejected += 1;
-        if (root === undefined) openRoots.set(contract, record.seq);
+        if (root === undefined) roots.set(contract, { seq: record.seq, status: state.status });
         threadFindings.push({
           code: 'transition-rejected',
           severity: 'anomaly',

@@ -314,7 +314,7 @@ cause.
 
 ```bash
 npm install
-npm test          # 87 tests, against a fixture of real frames and signed synthetic contracts
+npm test          # 88 tests, against a fixture of real frames and signed synthetic contracts
 npm run demo      # the three-way comparison
 npm run build
 node examples/live-run.mjs
