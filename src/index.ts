@@ -1,15 +1,38 @@
-export { scanRecords, parseServerTimestamp, parseExportLine } from './frames.js';
+export {
+  scanRecords,
+  parseServerTimestamp,
+  parseExportLine,
+  KNOWN_DECODER_GAPS,
+} from './frames.js';
 export type {
+  DecoderGap,
   FrameRecord,
   FrameRejection,
   FrameVerification,
+  KnownDecoderGap,
   ScanOptions,
   ScanResult,
   RoomRecord,
 } from './frames.js';
 
-export { buildThreads } from './threads.js';
+export { buildThreads, recomputedContractId } from './threads.js';
 export type { ContractThread, ThreadIndex } from './threads.js';
+
+export {
+  bindContracts,
+  routeFrames,
+  readDealRooms,
+  exportRecords,
+  framesByRoom,
+} from './deal-rooms.js';
+export type {
+  Bindings,
+  ContractBinding,
+  ContractMismatch,
+  DealRoomReads,
+  RoutedFrames,
+  WrongRoomFrame,
+} from './deal-rooms.js';
 
 export { audit } from './audit.js';
 export type {
@@ -22,7 +45,7 @@ export type {
 } from './audit.js';
 
 export { Follower } from './follow.js';
-export type { FollowOptions, FollowPass } from './follow.js';
+export type { DealPass, FollowOptions, FollowPass } from './follow.js';
 
 export { renderFindings, publishFindings, createNonceSource } from './publish.js';
 export type { PublishOptions, PublishOutcome } from './publish.js';

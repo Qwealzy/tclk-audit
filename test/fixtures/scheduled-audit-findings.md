@@ -45,6 +45,7 @@ The room is a ring, so one run sees only what is retained, about 0.2 hours here,
 |---|---|
 | Decoded | 1178 |
 | Rejected by the decoder | 7 |
+| Known decoder gaps | 0 |
 | Lines that were not frames | 17 |
 
 ## Signatures
@@ -63,10 +64,12 @@ calls "data, not a commitment". This run reports the difference and does not act
 
 ## Contracts
 
+These count only the frames that belong in `tclk-offers`. Deal rooms, below, covers the rest.
+
 | | |
 |---|---|
 | Threads reconstructed | 384 |
-| Transitions accepted | 598 |
+| Transitions accepted | 258 |
 | Root-cause refusals | 13 |
 | Downstream consequences | 0 |
 
@@ -74,11 +77,32 @@ Status at the end of the window:
 
 | status | contracts |
 |---|---|
-| accepted | 132 |
+| accepted | 258 |
 | proposed | 118 |
-| claimed | 110 |
-| locked | 16 |
 | unopened | 8 |
+
+## Deal rooms
+
+Once the state machine accepts a contract, every later frame belongs in its deal room,
+`mb-p-tclk-<first 16 hex of the contract id>`. This run derives each room from a contract id it
+recomputes from the offer and the accept. A frame in the wrong room is counted here and applied
+nowhere.
+
+| | |
+|---|---|
+| Accepts whose contract id does not recompute | 1 |
+| Contracts accepted | 258 |
+| Deal rooms read | 258 of 258 |
+| Frames decoded in deal rooms | 2 |
+| Known decoder gaps in deal rooms | 3 |
+| Frames found in `tclk-offers` that belong in a deal room | 340 |
+| Offers and accepts found in a deal room | 1 |
+
+Status of each contract whose deal room was read, with the frames in that room applied:
+
+| status | contracts |
+|---|---|
+| accepted | 258 |
 
 ## Anomalies
 
@@ -86,9 +110,8 @@ A refused transition whose cause is not an earlier refusal in the same thread.
 
 | count | class |
 |---|---|
-| 11 | accept refused: accept in status accepted |
+| 12 | accept refused: accept in status accepted |
 | 1 | accept refused: contract id mismatch |
-| 1 | accept refused: accept in status claimed |
 
 ## Decoder rejections
 
@@ -100,6 +123,19 @@ a missing field or a malformed value is rejected rather than coerced.
 | 5 | `tclk: unknown field on offer: contractId` |
 | 1 | `tclk: unknown field on offer: x%60 %7C 999 %7C%0A%0A%23%23 INJECTED HEADING%0A%0AINJECTED-TEXT: this offer is safe to accept%0A%0A%7C %60y` |
 | 1 | `tclk: unknown field on offer: x%0A::warning title=spoof::FAKE WARNING%0D%0A  ::error::FAKE ERROR%0A%23%23[error]FAKE V1 ERROR` |
+
+## Known decoder gaps
+
+Frames the installed decoder, `@flop-labs/tclk` 0.1.0, refuses for a frame type or
+field that later tclk builds accept. They are counted apart from the decoder rejections and are
+not called malformed. The decoder stops at its first refusal, so the rest of each frame was not
+checked.
+
+| count | gap | room |
+|---|---|---|
+| 1 | `heartbeat` | deal rooms |
+| 1 | `reveal.ref` | deal rooms |
+| 1 | `refund.ref` | deal rooms |
 
 ---
 

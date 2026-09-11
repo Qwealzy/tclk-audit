@@ -104,9 +104,43 @@ export interface FrameRejection {
   readonly reason: string;
 }
 
+/** A type or field that tclk builds after 0.1.0 accept and 0.1.0 refuses. */
+export type DecoderGap = 'heartbeat' | 'reveal.ref' | 'refund.ref';
+
+/**
+ * Refusals by the installed 0.1.0 decoder that come from the decoder being
+ * older than the frame. Each key is the decoder's exact message.
+ *
+ * STATED in tclk's source after 0.1.0 (commit 103a1b9, 2026-09-03):
+ * `heartbeat` is a frame type, and `reveal` and `refund` take an optional
+ * `ref`. PROBED 2026-09-11 against the installed 0.1.0: it refuses those three
+ * frames with exactly these messages.
+ *
+ * The decoder stops at the first thing it refuses. A known gap says only that
+ * the first refusal was one of these. The rest of the frame was not checked,
+ * and a later decoder may still refuse it for something else.
+ */
+export const KNOWN_DECODER_GAPS: ReadonlyMap<string, DecoderGap> = new Map([
+  ['tclk: unknown frame type: heartbeat', 'heartbeat'],
+  ['tclk: unknown field on reveal: ref', 'reveal.ref'],
+  ['tclk: unknown field on refund: ref', 'refund.ref'],
+]);
+
+/** A line the installed decoder refused for a reason in `KNOWN_DECODER_GAPS`. */
+export interface KnownDecoderGap extends FrameRejection {
+  readonly gap: DecoderGap;
+}
+
 export interface ScanResult {
   readonly frames: readonly FrameRecord[];
+  /** Lines the decoder refused, apart from known decoder gaps. */
   readonly rejections: readonly FrameRejection[];
+  /**
+   * Lines the decoder refused for a known decoder gap. Kept apart from
+   * `rejections`, so a frame that only a newer decoder reads is never reported
+   * as malformed, and never goes uncounted either.
+   */
+  readonly knownGaps: readonly KnownDecoderGap[];
   /** Messages in the room that were not tclk lines at all. Not an error. */
   readonly nonFrameCount: number;
 }
@@ -198,6 +232,7 @@ export function scanRecords(
 ): ScanResult {
   const frames: FrameRecord[] = [];
   const rejections: FrameRejection[] = [];
+  const knownGaps: KnownDecoderGap[] = [];
   let nonFrameCount = 0;
 
   for (const record of records) {
@@ -215,12 +250,10 @@ export function scanRecords(
 
     const frame = tryDecodeFrame(record.text);
     if (frame === null) {
-      rejections.push({
-        seq: BigInt(record.seq),
-        ts: record.ts,
-        from,
-        reason: rejectionReason(record.text),
-      });
+      const { reason, gap } = rejectionReason(record.text);
+      const rejection = { seq: BigInt(record.seq), ts: record.ts, from, reason };
+      if (gap === undefined) rejections.push(rejection);
+      else knownGaps.push({ ...rejection, gap });
       continue;
     }
 
@@ -235,7 +268,7 @@ export function scanRecords(
     });
   }
 
-  return { frames, rejections, nonFrameCount };
+  return { frames, rejections, knownGaps, nonFrameCount };
 }
 
 /**
@@ -278,9 +311,9 @@ function exactNonce(nonce: string | number | undefined): string | null {
  * explanation, and the explanation is the whole value of a rejection record.
  *
  * Every path out goes through `sanitizeReason`, so no caller ever holds the
- * raw message.
+ * raw message. The known-gap check reads the raw message, before it is encoded.
  */
-function rejectionReason(text: string): string {
+function rejectionReason(text: string): { reason: string; gap: DecoderGap | undefined } {
   let raw: string;
   try {
     decodeFrame(text);
@@ -288,7 +321,7 @@ function rejectionReason(text: string): string {
   } catch (error) {
     raw = error instanceof Error ? error.message : String(error);
   }
-  return sanitizeReason(raw);
+  return { reason: sanitizeReason(raw), gap: KNOWN_DECODER_GAPS.get(raw) };
 }
 
 const UTF8 = new TextEncoder();

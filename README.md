@@ -109,7 +109,8 @@ repository. The export they came from is not committed either.
 0.1.0 rejects `heartbeat` frames, a `reveal` that carries `ref`, and a `refund` that carries `ref`.
 The later build accepts all three. On that build the spec's field tables are generated from
 `schema/tclk1-frames.schema.json`, the same file the decoder uses. That file first appeared after
-0.1.0.
+0.1.0. With 0.1.0 installed, this tool reports those three refusals as known decoder gaps, apart
+from the other decoder rejections.
 
 Full retained `tclk-offers` export, 2026-09-06. 9,384 records, seq 338318..347701, a 1.2-hour
 window.
@@ -309,7 +310,7 @@ cause.
 
 ```bash
 npm install
-npm test          # 58 tests, against a fixture of real frames
+npm test          # 74 tests, against a fixture of real frames and signed synthetic contracts
 npm run demo      # the three-way comparison
 npm run build
 node examples/live-run.mjs

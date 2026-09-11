@@ -31,6 +31,14 @@
  * 2026-09-06, so a once-daily run samples about 5% to 7% of a day. The output
  * states its own window in seq and hours, so the accumulated history reads as a
  * series of samples rather than a continuous record.
+ *
+ * DEAL ROOMS
+ *
+ * Once the state machine accepts a contract, its later frames belong in the
+ * contract's deal room (src/deal-rooms.ts). After the board, the run reads the
+ * deal room of every accepted contract in the window through `/export`, one
+ * read each, oldest contract first. It stops at the first refused read, a 429
+ * included, retries nothing, and the file says how far it got.
  */
 
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
@@ -40,6 +48,7 @@ import { Transport } from 'technocore-client';
 import { scanRecords, parseExportLine } from '../dist/src/frames.js';
 import { buildThreads } from '../dist/src/threads.js';
 import { audit } from '../dist/src/audit.js';
+import { bindContracts, framesByRoom, readDealRooms, routeFrames } from '../dist/src/deal-rooms.js';
 
 const ROOM = process.env['TCLK_ROOM'] ?? 'tclk-offers';
 const OUT_DIR = process.env['TCLK_OUT_DIR'] ?? 'findings';
@@ -156,12 +165,16 @@ const scan = scanRecords(records, { room: ROOM });
 if (scan.frames.length === 0) {
   fail(
     `no frames decoded from ${records.length} records: ` +
-      `${scan.rejections.length} rejected, ${scan.nonFrameCount} not tclk lines`,
+      `${scan.rejections.length} rejected, ${scan.knownGaps.length} known decoder gaps, ` +
+      `${scan.nonFrameCount} not tclk lines`,
   );
 }
 
-const tclkLines = scan.frames.length + scan.rejections.length;
-const rejectionRate = tclkLines === 0 ? 1 : scan.rejections.length / tclkLines;
+// A known decoder gap is still a line the installed decoder could not read,
+// so it counts toward the ceiling the same as any other refusal.
+const refused = [...scan.rejections, ...scan.knownGaps];
+const tclkLines = scan.frames.length + refused.length;
+const rejectionRate = tclkLines === 0 ? 1 : refused.length / tclkLines;
 
 if (rejectionRate > REJECTION_RATE_CEILING) {
   // A rate this far above the floor means most tclk lines did not decode with
@@ -170,7 +183,7 @@ if (rejectionRate > REJECTION_RATE_CEILING) {
   // schema. The message states what was measured and leaves the cause to the
   // reader.
   const reasons = new Map();
-  for (const rejection of scan.rejections) {
+  for (const rejection of refused) {
     reasons.set(rejection.reason, (reasons.get(rejection.reason) ?? 0) + 1);
   }
   const top = [...reasons]
@@ -181,14 +194,32 @@ if (rejectionRate > REJECTION_RATE_CEILING) {
   fail(
     `decode rejection rate ${(rejectionRate * 100).toFixed(1)}% exceeds the ` +
       `${(REJECTION_RATE_CEILING * 100).toFixed(0)}% ceiling. ` +
-      `${scan.rejections.length} of ${tclkLines} tclk lines in the export failed the installed ` +
+      `${refused.length} of ${tclkLines} tclk lines in the export failed the installed ` +
       `decoder, @flop-labs/tclk ${installedDecoderVersion()}, so no findings file was written. ` +
       `Top reasons: ${top}`,
   );
 }
 
-const index = buildThreads(scan.frames);
-const report = audit(index, scan.rejections, { nowMs: Date.now() });
+const nowMs = Date.now();
+const { bindings, mismatches } = bindContracts(scan.frames);
+const dealRooms = [...new Set(bindings.map((b) => b.room))];
+const reads = await readDealRooms(transport, dealRooms);
+const routed = routeFrames({ room: ROOM, frames: scan.frames }, bindings, framesByRoom(reads));
+const dealScans = [...reads.scans.values()];
+
+const index = buildThreads(routed.board);
+const report = audit(index, scan.rejections, { nowMs });
+const dealReport = audit(
+  routed.deals,
+  dealScans.flatMap((s) => s.rejections),
+  { nowMs },
+);
+
+// Every tclk line in the export, as the window was counted before frames were
+// split by room. A frame in the wrong room is still part of the ring.
+const windowSeqs = [...scan.frames, ...refused].map((item) => item.seq);
+const windowFirst = windowSeqs.reduce((a, b) => (b < a ? b : a), windowSeqs[0]);
+const windowLast = windowSeqs.reduce((a, b) => (b > a ? b : a), windowSeqs[0]);
 
 const times = records.map((r) => Date.parse(r.ts)).filter((n) => Number.isFinite(n));
 const spanHours =
@@ -213,6 +244,15 @@ const rejections = tally(scan.rejections, (r) => r.reason);
 // audit above folded every decoded frame, whatever this says.
 const verificationCounts = new Map(tally(scan.frames, (f) => f.verification));
 const verificationCount = (kind) => verificationCounts.get(kind) ?? 0;
+
+const wrongRoomOnBoard = routed.wrongRoom.filter((w) => w.room === ROOM).length;
+const knownGaps = tally(
+  [
+    ...scan.knownGaps.map((g) => ({ gap: g.gap, where: `\`${ROOM}\`` })),
+    ...dealScans.flatMap((s) => s.knownGaps.map((g) => ({ gap: g.gap, where: 'deal rooms' }))),
+  ],
+  (g) => `| \`${g.gap}\` | ${g.where} |`,
+);
 
 const generatedAt = new Date().toISOString();
 // Sortable, and colon-free so the name is valid on every filesystem. A second
@@ -241,7 +281,7 @@ const lines = [
   '|---|---|',
   `| Generated | ${generatedAt} |`,
   `| Room | \`${ROOM}\` |`,
-  `| Seq range | ${report.windowFirstSeq ?? '?'}..${report.windowLastSeq ?? '?'} |`,
+  `| Seq range | ${windowFirst ?? '?'}..${windowLast ?? '?'} |`,
   `| Records exported | ${records.length} |`,
   spanHours === null
     ? '| Traffic span | unknown |'
@@ -261,6 +301,7 @@ const lines = [
   '|---|---|',
   `| Decoded | ${scan.frames.length} |`,
   `| Rejected by the decoder | ${scan.rejections.length} |`,
+  `| Known decoder gaps | ${scan.knownGaps.length} |`,
   `| Lines that were not frames | ${scan.nonFrameCount} |`,
   '',
   '## Signatures',
@@ -279,6 +320,8 @@ const lines = [
   '',
   '## Contracts',
   '',
+  `These count only the frames that belong in \`${ROOM}\`. Deal rooms, below, covers the rest.`,
+  '',
   '| | |',
   '|---|---|',
   `| Threads reconstructed | ${report.threadCount} |`,
@@ -291,6 +334,37 @@ const lines = [
   '| status | contracts |',
   '|---|---|',
   ...Object.entries(report.byStatus)
+    .sort((a, b) => b[1] - a[1])
+    .map(([status, count]) => `| ${status} | ${count} |`),
+  '',
+  '## Deal rooms',
+  '',
+  'Once the state machine accepts a contract, every later frame belongs in its deal room,',
+  '`mb-p-tclk-<first 16 hex of the contract id>`. This run derives each room from a contract id it',
+  'recomputes from the offer and the accept. A frame in the wrong room is counted here and applied',
+  'nowhere.',
+  '',
+  '| | |',
+  '|---|---|',
+  `| Accepts whose contract id does not recompute | ${mismatches.length} |`,
+  `| Contracts accepted | ${bindings.length} |`,
+  `| Deal rooms read | ${reads.scans.size} of ${dealRooms.length} |`,
+  `| Frames decoded in deal rooms | ${dealScans.reduce((n, s) => n + s.frames.length, 0)} |`,
+  `| Known decoder gaps in deal rooms | ${dealScans.reduce((n, s) => n + s.knownGaps.length, 0)} |`,
+  `| Frames found in \`${ROOM}\` that belong in a deal room | ${wrongRoomOnBoard} |`,
+  `| Offers and accepts found in a deal room | ${routed.wrongRoom.length - wrongRoomOnBoard} |`,
+  '',
+  ...(reads.stopped === null
+    ? []
+    : [
+        `Reading stopped at a refused read (${reads.stopped.error}). The deal rooms after it were not read.`,
+        '',
+      ]),
+  'Status of each contract whose deal room was read, with the frames in that room applied:',
+  '',
+  '| status | contracts |',
+  '|---|---|',
+  ...Object.entries(dealReport.byStatus)
     .sort((a, b) => b[1] - a[1])
     .map(([status, count]) => `| ${status} | ${count} |`),
   '',
@@ -325,6 +399,22 @@ if (rejections.length > 0) {
   );
 }
 
+if (knownGaps.length > 0) {
+  lines.push(
+    '## Known decoder gaps',
+    '',
+    `Frames the installed decoder, \`@flop-labs/tclk\` ${installedDecoderVersion()}, refuses for a frame type or`,
+    'field that later tclk builds accept. They are counted apart from the decoder rejections and are',
+    'not called malformed. The decoder stops at its first refusal, so the rest of each frame was not',
+    'checked.',
+    '',
+    '| count | gap | room |',
+    '|---|---|---|',
+    ...knownGaps.map(([row, count]) => `| ${count} ${row}`),
+    '',
+  );
+}
+
 lines.push(
   '---',
   '',
@@ -339,9 +429,14 @@ writeFileSync(path, lines.join('\n'), 'utf8');
 
 console.log(`wrote ${path}`);
 console.log(
-  `  window ${report.windowFirstSeq}..${report.windowLastSeq} | ` +
+  `  window ${windowFirst}..${windowLast} | ` +
     `${scan.frames.length} frames | ${report.threadCount} threads | ` +
     `${report.transitionsAccepted} ok / ${report.transitionsRejected} refused / ` +
     `${report.transitionsBlocked} blocked`,
+);
+console.log(
+  `  deal rooms ${reads.scans.size} of ${dealRooms.length} read | ` +
+    `${routed.wrongRoom.length} frames in the wrong room` +
+    (reads.stopped === null ? '' : ` | stopped at ${reads.stopped.error}`),
 );
 console.log(`  read budget after run: ${JSON.stringify(transport.budget.read)}`);

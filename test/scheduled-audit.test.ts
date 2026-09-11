@@ -13,6 +13,9 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { OFFER_ROOM } from '@flop-labs/tclk';
+import { parseExportLine, scanRecords, type RoomRecord } from '../src/frames.js';
+import { bindContracts } from '../src/deal-rooms.js';
 
 /**
  * The scheduled run, end to end and offline.
@@ -32,6 +35,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
  * before rejection reasons were encoded. The expected file was recorded from
  * the same run. When the script or its banner changes on purpose, record it
  * again and check the diff.
+ *
+ * Every deal room exports as empty except one. test/fixtures/
+ * deal-room-synthetic.jsonl is five records in the deal room of the first
+ * contract the fixture binds. They were signed once by a throwaway key that was
+ * never written down: three frames 0.1.0 refuses for a known decoder gap, an
+ * accept in the wrong room, and a lock from a key that is not the payer's.
  */
 
 const LF = String.fromCharCode(10);
@@ -60,10 +69,16 @@ interface Run {
   readonly outDir: string;
 }
 
-function runScheduledAudit(name: string, exportLines: readonly string[]): Run {
+function runScheduledAudit(
+  name: string,
+  exportLines: readonly string[],
+  rooms: Readonly<Record<string, string>> = {},
+): Run {
   const exportPath = join(scratch, name + '.jsonl');
+  const roomsPath = join(scratch, name + '-rooms.json');
   const outDir = join(scratch, name + '-out');
   writeFileSync(exportPath, exportLines.join(LF) + LF);
+  writeFileSync(roomsPath, JSON.stringify(rooms));
 
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env['TCLK_MAX_REJECTION_RATE'];
@@ -79,6 +94,7 @@ function runScheduledAudit(name: string, exportLines: readonly string[]): Run {
       env: {
         ...env,
         FAKE_EXPORT: exportPath,
+        FAKE_ROOMS: roomsPath,
         FAKE_NOW: NOW,
         TCLK_ROOM: 'tclk-offers',
         TCLK_OUT_DIR: outDir,
@@ -113,9 +129,22 @@ afterAll(() => {
 describe('the scheduled run, offline', () => {
   const fixture = lines(at('test', 'fixtures', 'tclk-slice.jsonl'));
   const crafted = lines(at('test', 'fixtures', 'crafted-rejections.jsonl'));
+  const synthetic = at('test', 'fixtures', 'deal-room-synthetic.jsonl');
+
+  /** The deal room of the first contract the fixture binds, and that contract. */
+  function firstBinding(): { room: string; contract: string } {
+    const records = fixture.map((l) => parseExportLine(l)).filter((r): r is RoomRecord => r !== null);
+    const [binding] = bindContracts(scanRecords(records, { room: OFFER_ROOM }).frames).bindings;
+    if (binding === undefined) throw new Error('the fixture binds no contract');
+    return { room: binding.room, contract: binding.contract };
+  }
 
   it('writes the same findings file as the recorded run', () => {
-    const run = runScheduledAudit('passes', [...fixture, ...crafted]);
+    const { room, contract } = firstBinding();
+    // The synthetic records name the contract they were made for. If the
+    // binding moves, this fails here instead of serving an unread file.
+    expect(lines(synthetic).some((l) => l.includes(contract.slice(2)))).toBe(true);
+    const run = runScheduledAudit('passes', [...fixture, ...crafted], { [room]: synthetic });
     expect(run.status, run.stderr).toBe(0);
     expect(readdirSync(run.outDir)).toEqual([STAMP + '.md']);
 

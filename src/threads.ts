@@ -1,3 +1,9 @@
+import {
+  contractId,
+  type AcceptCore,
+  type AcceptFrame,
+  type OfferFrame,
+} from '@flop-labs/tclk';
 import type { FrameRecord } from './frames.js';
 
 /**
@@ -15,7 +21,31 @@ import type { FrameRecord } from './frames.js';
  * So the accept is the hinge: without it, later frames cannot be attributed to
  * the offer they belong to. A thread is keyed on the offer id because that is
  * the identifier present from the beginning.
+ *
+ * The accept's `contract` field is written by its sender. So a contract id is
+ * taken only from an accept it can be recomputed for. See
+ * `recomputedContractId`.
  */
+
+/**
+ * The contract id SPEC §3.2 gives for this offer and acceptance, computed with
+ * 0.1.0's own `contractId`.
+ *
+ * STATED [SPEC.md section 3.2, 0.1.0]: `contract` = `0x` + sha256 of
+ * `FLOP::tclk::v1|contract|<canonical {offer, accept-core}>`, binding the full
+ * offer and the acceptance (`ref`, `from`, `statement`, `paymentKey`,
+ * `nonce`). "Both sides recompute it; a mismatch rejects the frame."
+ */
+export function recomputedContractId(offer: OfferFrame, accept: AcceptFrame): string {
+  const core: AcceptCore = {
+    from: accept.from,
+    ref: accept.ref,
+    statement: accept.statement,
+    nonce: accept.nonce,
+  };
+  if (accept.paymentKey !== undefined) core.paymentKey = accept.paymentKey;
+  return contractId(offer, core);
+}
 
 export interface ContractThread {
   /** The offer id, or a synthetic key when the offer was never seen. */
@@ -36,7 +66,8 @@ export interface ThreadIndex {
    * Frames naming a contract whose accept was never seen, so they cannot be
    * attributed to any offer. Kept separately rather than dropped: near the
    * start of a retained window these are almost always the ring having
-   * forgotten the earlier frames, not a fault.
+   * forgotten the earlier frames, not a fault. A frame naming an id that no
+   * accept here recomputes to lands here too.
    */
   readonly unattributed: readonly FrameRecord[];
 }
@@ -61,13 +92,22 @@ export function buildThreads(frames: readonly FrameRecord[]): ThreadIndex {
       // First writer wins on a duplicate id: the offer id is a hash of the
       // offer's own fields, so a repeat is the same offer posted twice.
       if (!offers.has(record.frame.id)) offers.set(record.frame.id, record);
-    } else if (record.frame.type === 'accept') {
-      // First accept binds the contract. A second accept on the same offer is
-      // a real event the state machine will reject, and it must not be allowed
-      // to re-point the mapping.
-      if (!contractToOffer.has(record.frame.contract)) {
-        contractToOffer.set(record.frame.contract, record.frame.ref);
-      }
+    }
+  }
+
+  for (const record of ordered) {
+    if (record.frame.type !== 'accept') continue;
+    // An accept whose offer is not here cannot be checked, and one whose
+    // `contract` is not what the two hash to names no real contract. Neither
+    // gives a contract id to attribute later frames by.
+    const offer = offers.get(record.frame.ref);
+    if (offer === undefined || offer.frame.type !== 'offer') continue;
+    if (recomputedContractId(offer.frame, record.frame) !== record.frame.contract) continue;
+    // First accept binds the contract. A second accept on the same offer is
+    // a real event the state machine will reject, and it must not be allowed
+    // to re-point the mapping.
+    if (!contractToOffer.has(record.frame.contract)) {
+      contractToOffer.set(record.frame.contract, record.frame.ref);
     }
   }
 
