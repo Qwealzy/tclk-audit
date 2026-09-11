@@ -23,6 +23,12 @@
 >   call. They also reach a room message when findings are published at notice level. The advice
 >   guard never checks any of them.
 >
+> The tool cannot currently produce a findings file at all. On 2026-09-11, 64.6% of live tclk lines
+> failed the decoder, far above the 5% rejection ceiling. Most of those were accept frames missing
+> the required `contract` field, tracked upstream in
+> [flop-labs/tclk#142](https://github.com/flop-labs/tclk/issues/142) and
+> [flop-labs/tclk#147](https://github.com/flop-labs/tclk/issues/147).
+>
 > The numbers and claims below were written before these defects were known. Treat them as
 > unverified.
 
