@@ -3,17 +3,18 @@
 > [!CAUTION]
 > **Known broken and under repair. Do not rely on this tool or its findings.**
 >
-> Three defects affect everything below. Banner added 2026-09-11.
+> Three defects affect everything below. Banner added 2026-09-11 and revised the same day, once the
+> tool read deal rooms and checked signatures.
 >
-> - **No signature verification happens.** This README says the tool rebuilds each contract from
->   its signed frames. The code never verifies a signature. It also never checks that a frame's
->   `from` matches the key that signed the record, which the tclk spec requires (SPEC.md,
->   section 2). Unsigned records and records whose signature fails are applied the same as valid
->   ones.
-> - **It reads the wrong room.** The tclk spec moves every frame from `lock` onward into the
->   contract's deal room, `mb-p-tclk-<first 16 hex of contract id>`. The tool reads only
->   `tclk-offers` and applies the lock, reveal, refund and receipt frames it finds there. Every
->   locked, claimed and refunded count it reports comes from those frames.
+> - **A refusal hides the anomalies after it.** Once one transition in a contract is refused, the
+>   audit counts every later refusal in that contract as a downstream consequence of it, at info
+>   level, whatever that refusal's own cause. An independent fault that comes after a refusal is
+>   never listed as an anomaly. This is not fixed yet.
+> - **Signatures are checked but not acted on.** This README says the tool rebuilds each contract
+>   from its signed frames. It checks each frame's signature, and whether the frame's `from` is the
+>   key that signed it, and counts the results. The tclk spec says only a verified frame is a
+>   commitment (SPEC.md, section 2). The tool does not act on the check yet. An unsigned record, or
+>   one whose signature fails, still moves a contract the same as a valid one.
 > - **A crafted field name still puts a stranger's words into findings.** The decoder repeats an
 >   unknown field name word for word in its error message, and whoever posted the frame chose that
 >   name. The message is percent-encoded where it is produced, so it cannot add a line, end a code
