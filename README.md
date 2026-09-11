@@ -272,7 +272,7 @@ review.
 
 ```bash
 npm install
-npm test          # 47 tests, against a fixture of real frames
+npm test          # 49 tests, against a fixture of real frames
 npm run demo      # the three-way comparison
 npm run build
 node examples/live-run.mjs
