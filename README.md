@@ -32,6 +32,10 @@
 >   It is that accept's `ref`, which the decoder limits to `0x` and 64 hex digits, and it reaches the
 >   model prompt. The advice guard checks none of them.
 >
+> Also fixed on 2026-09-12 (fcc4d1a), and never listed here before. One frame that a stranger could
+> post, such as a lock whose type is `["lock"]`, stopped a run with a TypeError before it wrote
+> anything. It was found on 2026-09-11.
+>
 > The tool cannot currently produce a findings file at all. On 2026-09-11, 64.6% of live tclk lines
 > failed the decoder, far above the 5% rejection ceiling. Most of those were accept frames missing
 > the required `contract` field, tracked upstream in
