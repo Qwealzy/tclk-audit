@@ -189,13 +189,15 @@ else and gives one reason. So a frame that has its own fault, and also arrives i
 refused for the status, and its own fault is never reported. When its contract has an open root, the
 frame is also chained there as a consequence. A stranger's lock after a refused accept is one example.
 
-The second is a late copy. A copy of an accept, lock, reveal, refund or cancel that already applied
-is refused for the status. SPEC.md section 4 says "Duplicates and replays are rejections without state
-change". This tool chains such a copy to its contract's open root when there is one, so its causedBy
-names an earlier refusal it has nothing to do with. With no root open, the same copy is a root. It is
-reported either way. A receipt copy is accepted again, and an offer copy is not folded at all. Telling
-a late copy from a frame still waiting on a refused transition needs the order of the statuses, a
-separate design decision that the 2026-09-11 change left out.
+The second is a frame that arrives after the status has moved past it. A late copy of an accept,
+lock, reveal, refund or cancel is one kind. SPEC.md section 4 says "Duplicates and replays are
+rejections without state change". A cancel sent after the lock, or a second lock with a new ref, is
+another. The machine refuses each for the status. This tool chains such a frame to its contract's
+open root when there is one, so its causedBy names an earlier refusal it has nothing to do with. With
+no root open, the same frame is a root. It is reported either way. A receipt copy is accepted again,
+and an offer copy is not folded at all. Telling a frame that came too late from one still waiting on
+a refused transition needs the order of the statuses, a separate design decision that the 2026-09-11
+change left out.
 
 A frame whose timestamp does not parse is not applied. It is reported with the code
 `transition-rejected` at notice level and counted in neither total. Count roots by the root-cause

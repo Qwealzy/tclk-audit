@@ -10,8 +10,9 @@
 >   per contract. In `tclk-offers`, a refusal the machine gives for any reason other than status is
 >   listed under Anomalies. State machine refusals inside deal rooms are not listed in this file.
 >   Two limits remain. A frame refused for its status can have another fault the machine never
->   reports. A late copy of a frame that already applied can be chained to an unrelated earlier
->   refusal. Either can be counted below as a downstream consequence.
+>   reports. A frame that arrives after the status has moved past it, a late copy for example, can
+>   be chained to an unrelated earlier refusal. Either can be counted below as a downstream
+>   consequence.
 > - **Signatures are checked but not acted on.** The Signatures table counts the checks on frames
 >   read from `tclk-offers`. Deal-room frames are checked and not counted there. The tclk spec says
 >   only a verified frame is a commitment (SPEC.md, section 2). An unsigned record, or one whose

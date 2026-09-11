@@ -250,15 +250,16 @@ export function audit(
      * receipt, the status is checked before anything else. A status refusal
      * can therefore hide another fault in the same frame. It is still chained.
      *
-     * A known limit, left for a separate decision. A late copy of an accept,
-     * lock, reveal, refund or cancel that already applied is refused for the
-     * status. A receipt copy is accepted again, and an offer copy is not
-     * folded. STATED [SPEC.md section 4, 0.1.0]: "Duplicates and replays are
-     * rejections without state change".
-     * When its contract has an open root, the copy is chained to it, so its
+     * A known limit, left for a separate decision. A frame that arrives after
+     * the status has moved past it is refused for the status. A late copy of
+     * an accept, lock, reveal, refund or cancel is one such frame, and a
+     * cancel sent after the lock is another. STATED [SPEC.md section 4, 0.1.0]:
+     * "Duplicates and replays are rejections without state change". A receipt
+     * copy is accepted again, and an offer copy is not folded.
+     * When its contract has an open root, such a frame is chained to it, so its
      * `causedBy` names an unrelated refusal. With no root open, it is a root.
-     * Telling a late copy from a frame still waiting on a refused transition
-     * needs the order of the statuses, which this rule does not use.
+     * Telling a frame that came too late from one still waiting on a refused
+     * transition needs the order of the statuses, which this rule does not use.
      */
     /** Each contract's latest root, and the status the machine was in then. */
     const roots = new Map<string, { readonly seq: bigint; readonly status: TclkStatus }>();
