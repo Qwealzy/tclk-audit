@@ -172,9 +172,9 @@ never applied. Counting those separately multiplies one cause into a thread's wo
 1,078 raw refusals over the unreleased-decoder window above resolve to 627 root causes and 451
 consequences. That split came from the rule this tool used until 2026-09-11, which counted every
 later refusal in an offer's thread as a consequence of the first, whatever its own cause. That rule
-is known to be wrong, so treat 627 and 451, here and in the table above, as unreliable. They cannot
-be measured again from this repository. Only roots are
-anomalies. Each consequence carries the seq of the refusal that caused it.
+is known to be wrong, so treat 627 and 451 as unreliable, here and in the tables above. That includes
+the anomaly classes, which add up to 627. They cannot be measured again from this repository. Only
+roots are anomalies. Each consequence carries the seq of the refusal that caused it.
 
 **A warm-up boundary.** An accept whose offer is missing looks like an orphan. Rooms are a ring, so
 the beginning of any window is always missing what came before it. Measured on the 2026-09-05
