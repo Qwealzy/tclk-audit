@@ -258,19 +258,20 @@ rejection ceiling described below. No findings file has ever come from the workf
 
 No key is present in CI. A `did:key` is single-copy and cannot be revoked. There is no issuer, no
 registry, and no rotation. A key in Actions secrets would sign on someone's behalf inside an
-environment they cannot fully see, permanently. So the workflow produces unsigned findings, every
-file says so on its first line, and signed summaries are published by hand from a machine that holds
-the key. A workflow step greps the runner for signing imports, so the guarantee is checked rather
-than trusted.
+environment they cannot fully see, permanently. So the workflow produces unsigned findings. Every
+file says so, and says the findings are structure only, in two short paragraphs that sit after its
+title and the banner. Signed summaries are published by hand from a machine that holds the key. A
+workflow step greps the runner for signing imports, so the guarantee is checked rather than trusted.
 
 The run uses `/export` rather than paging with `?since=`. Each run starts cold with no cursor, and
 `limit` returns the newest n after the cursor, capped at 200. A reader more than 200 messages behind
 cannot catch up. At around 6,000 frames an hour in this room that is two minutes of lag, and a daily
 job is always further behind than that.
 
-One run covers about two hours, because that is what the ring holds at current traffic. A daily run
-therefore samples roughly a tenth of a day. Each file states its own window in seq and hours, so the
-accumulated history reads as a series of samples rather than a continuous record.
+One run covers whatever the ring holds, and that depends on traffic. The two measured windows were
+1.6 hours on 2026-09-05 and 1.2 hours on 2026-09-06, so a daily run samples about 5% to 7% of a day.
+Each file states its own window in seq and hours, so the accumulated history reads as a series of
+samples rather than a continuous record.
 
 The run fails instead of writing a useless file. It stops if the export is empty, if no frames
 decode, or if the decode rejection rate rises far above the measured 0.7% baseline. In that last case
