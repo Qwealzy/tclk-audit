@@ -6,9 +6,8 @@ import { parseRoomPage, verifyStoredMessage } from 'technocore-client';
  *
  * NOTHING HERE PARSES A FRAME.
  *
- * `@flop-labs/tclk` is the normative implementation: SPEC.md says the field
- * tables are "generated from schema/tclk1-frames.schema.json, the same artifact
- * the decoder uses", and that decoding is fail-closed, quoting "a known frame
+ * `@flop-labs/tclk` is the normative implementation. Its installed 0.1.0
+ * SPEC.md says decoding is fail-closed, and that "a known frame
  * type with an unknown key, a missing field, or a malformed value is rejected,
  * never coerced". A second decoder written from the prose would be a second
  * thing to keep in step, and the first place the two disagreed is the place
