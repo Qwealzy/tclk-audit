@@ -3,13 +3,15 @@
 > [!CAUTION]
 > **Known broken and under repair. Do not rely on this tool or its findings.**
 >
-> Three defects affect everything below. Banner added 2026-09-11 and revised the same day, once the
-> tool read deal rooms and checked signatures.
+> Two open defects affect everything below. A third, listed first, is fixed. Banner added 2026-09-11
+> and revised the same day, once the tool read deal rooms, checked signatures and chained refusals
+> per contract.
 >
-> - **A refusal hides the anomalies after it.** Once one transition in a contract is refused, the
->   audit counts every later refusal in that contract as a downstream consequence of it, at info
->   level, whatever that refusal's own cause. An independent fault that comes after a refusal is
->   never listed as an anomaly. This is not fixed yet.
+> - **Fixed on 2026-09-11 (9f367e8, e458750): a refusal no longer hides the anomalies after it.**
+>   Until then, once one transition in a contract was refused, the audit counted every later refusal
+>   in that contract as a downstream consequence of it, whatever that refusal's own cause. Now a
+>   refusal for any reason other than status is always its own anomaly, and chains are kept per
+>   contract. One limit remains, described under "Two things measured, not assumed" below.
 > - **Signatures are checked but not acted on.** This README says the tool rebuilds each contract
 >   from its signed frames. It checks each frame's signature, and whether the frame's `from` is the
 >   key that signed it, and counts the results. The tclk spec says only a verified frame is a
@@ -166,15 +168,33 @@ Anomaly classes by count:
 
 ## Two things measured, not assumed
 
-**Root causes versus cascade.** Once a transition is refused the state does not move, so every later
-frame in that thread is refused too. A lock lands "in status proposed" because the accept before it
-never applied. Counting those separately multiplies one cause into a thread's worth of noise. The
-1,078 raw refusals over the unreleased-decoder window above resolve to 627 root causes and 451
+**Root causes versus cascade.** A refused transition does not move the state, so a later frame that
+needed it is refused for the stale status. A lock lands "in status proposed" because the accept before
+it never applied. Counting that lock as its own fault multiplies one cause. So refusals are chained,
+one chain per contract, the id each frame names. A refusal for any reason other than status is always
+its own anomaly. A status refusal is a consequence of its contract's open root, and carries that
+root's seq. A root stays open only while the machine is still in the status the root was opened in.
+A transition that moves the status breaks the chain, and the next status refusal starts a new one.
+Neither tclk's spec nor technocore.chat defines this split. It is this tool's own rule, in place since
+2026-09-11. Only roots are anomalies.
+
+The 1,078 raw refusals over the unreleased-decoder window above resolve to 627 root causes and 451
 consequences. That split came from the rule this tool used until 2026-09-11, which counted every
 later refusal in an offer's thread as a consequence of the first, whatever its own cause. That rule
 is known to be wrong, so treat 627 and 451 as unreliable, here and in the tables above. That includes
-the anomaly classes, which add up to 627. They cannot be measured again from this repository. Only
-roots are anomalies. Each consequence carries the seq of the refusal that caused it.
+the anomaly classes, which add up to 627. They cannot be measured again from this repository.
+
+One limit remains. A late copy of a frame that already applied, a lock sent twice for example, is
+refused for the status. SPEC.md section 4 says "Duplicates and replays are rejections without state
+change". This tool chains such a copy to its contract's open root when there is one, so its causedBy
+names an earlier refusal it has nothing to do with. With no root open, the same copy is a root. It is
+reported either way, and nothing is dropped. Telling a late copy from a frame still waiting on a
+refused transition needs the order of the statuses, a separate design decision that the 2026-09-11
+change left out.
+
+A frame whose timestamp does not parse is not applied. It is reported with the code
+`transition-rejected` at notice level and counted in neither total. Count roots by severity `anomaly`,
+or by the root-cause total, and never by that code alone.
 
 **A warm-up boundary.** An accept whose offer is missing looks like an orphan. Rooms are a ring, so
 the beginning of any window is always missing what came before it. Measured on the 2026-09-05

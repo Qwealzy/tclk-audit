@@ -30,7 +30,14 @@ export type Severity = 'info' | 'notice' | 'anomaly';
 export type FindingCode =
   /** A line that looked like a frame and failed the normative decoder. */
   | 'frame-rejected'
-  /** The machine refused a transition, and no open root in its contract's chain explains it. */
+  /**
+   * The machine refused a transition, and no open root in its contract's chain
+   * explains it. Severity anomaly, counted in `transitionsRejected`.
+   *
+   * The same code at notice level marks a frame whose timestamp did not parse.
+   * That frame was not applied, and is counted in neither total. Count roots by
+   * severity or by `transitionsRejected`, never by this code alone.
+   */
   | 'transition-rejected'
   /**
    * The machine refused a transition for the status it was in, and an earlier
@@ -241,6 +248,14 @@ export function audit(
      * STATED in 0.1.0's machine.js: for lock, reveal, refund, cancel and
      * receipt, the status is checked before anything else. A status refusal
      * can therefore hide another fault in the same frame. It is still chained.
+     *
+     * A known limit, left for a separate decision. A late copy of a frame that
+     * already applied is refused for the status. STATED [SPEC.md section 4,
+     * 0.1.0]: "Duplicates and replays are rejections without state change".
+     * When its contract has an open root, the copy is chained to it, so its
+     * `causedBy` names an unrelated refusal. With no root open, it is a root.
+     * Telling a late copy from a frame still waiting on a refused transition
+     * needs the order of the statuses, which this rule does not use.
      */
     /** Each contract's latest root, and the status the machine was in then. */
     const roots = new Map<string, { readonly seq: bigint; readonly status: TclkStatus }>();
@@ -249,6 +264,9 @@ export function audit(
       if (record.frame.type === 'offer') continue;
 
       if (!Number.isFinite(record.tsMs)) {
+        // Not applied, so neither a root nor a consequence, and counted in
+        // neither total. It shares the code transition-rejected at notice
+        // level. See that code's doc.
         threadFindings.push({
           code: 'transition-rejected',
           severity: 'notice',
