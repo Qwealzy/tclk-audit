@@ -32,7 +32,9 @@
  * samples rather than a continuous record.
  */
 
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { Transport } from 'technocore-client';
 import { scanRecords } from '../dist/src/frames.js';
 import { buildThreads } from '../dist/src/threads.js';
@@ -46,7 +48,9 @@ const OUT_DIR = process.env['TCLK_OUT_DIR'] ?? 'findings';
  *
  * MEASURED twice against the live ring on 2026-09-05: 82 rejections in 12,231
  * tclk lines (0.67%), and 113 in 16,331 (0.69%). That floor is a handful of agents
- * emitting frames with an extra field. It is stable.
+ * emitting frames with an extra field. It held across those two samples and has
+ * not held since. Every run from 2026-09-08 to 2026-09-11 was between 51.0% and
+ * 67.3%.
  *
  * The ceiling is 5%, roughly seven times the observed rate. The failure this
  * guards against is not gradual. If the frame schema moves under us, or the
@@ -83,6 +87,26 @@ const KNOWN_DEFECTS_BANNER = [
   '>   name cannot add a line, end the code span or table cell, or run as a workflow command. Its',
   '>   words still appear, and the advice guard never checks them.',
 ];
+
+/**
+ * The version of the decoder that judged the lines, read from its own
+ * package.json. A rejection rate means little without it. 0.1.0 already
+ * refuses frames that later versions accept.
+ */
+function installedDecoderVersion() {
+  let dir = dirname(createRequire(import.meta.url).resolve('@flop-labs/tclk'));
+  for (;;) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+      if (pkg.name === '@flop-labs/tclk') return pkg.version;
+    } catch {
+      // No package.json at this level. Keep walking up.
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return 'unknown';
+    dir = parent;
+  }
+}
 
 function fail(message, error) {
   // The ::error:: prefix surfaces this in the Actions log and the job summary.
@@ -141,8 +165,11 @@ const tclkLines = scan.frames.length + scan.rejections.length;
 const rejectionRate = tclkLines === 0 ? 1 : scan.rejections.length / tclkLines;
 
 if (rejectionRate > REJECTION_RATE_CEILING) {
-  // At this magnitude the schema has moved. A few agents misbehaving does not
-  // reach it. This is worth knowing on the day, not at a quarterly review.
+  // A rate this far above the floor means most tclk lines did not decode with
+  // the installed decoder. That has had more than one cause. The decoder can be
+  // older than the traffic, or the traffic can fail every version of the
+  // schema. The message states what was measured and leaves the cause to the
+  // reader.
   const reasons = new Map();
   for (const rejection of scan.rejections) {
     reasons.set(rejection.reason, (reasons.get(rejection.reason) ?? 0) + 1);
@@ -154,8 +181,10 @@ if (rejectionRate > REJECTION_RATE_CEILING) {
     .join('; ');
   fail(
     `decode rejection rate ${(rejectionRate * 100).toFixed(1)}% exceeds the ` +
-      `${(REJECTION_RATE_CEILING * 100).toFixed(0)}% ceiling ` +
-      `(${scan.rejections.length}/${tclkLines}); the frame schema may have moved. Top reasons: ${top}`,
+      `${(REJECTION_RATE_CEILING * 100).toFixed(0)}% ceiling. ` +
+      `${scan.rejections.length} of ${tclkLines} tclk lines in the export failed the installed ` +
+      `decoder, @flop-labs/tclk ${installedDecoderVersion()}, so no findings file was written. ` +
+      `Top reasons: ${top}`,
   );
 }
 

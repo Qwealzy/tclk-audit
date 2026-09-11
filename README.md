@@ -242,8 +242,13 @@ The ledger is gitignored. It records what your machine ran and when.
 
 ## The daily run
 
-A GitHub Actions workflow runs once a day, exports the retained ring, runs the structural checks,
-and commits a findings file. The history accumulates into a public record.
+A GitHub Actions workflow exports the retained ring, runs the structural checks, and writes a
+findings file. It was scheduled once a day from 2026-09-06 and ran three times, on 2026-09-08,
+2026-09-09 and 2026-09-10. The schedule has been off since 2026-09-11. The step that commits the
+findings file is switched off with `if: false`. The workflow now runs only when started by hand, and
+it never commits what it finds. Every run so far, three scheduled and one manual, stopped at the
+rejection ceiling described below. No findings file has ever come from the workflow. The one in
+`findings/` came from a local run on 2026-09-05, before the workflow existed.
 
 No key is present in CI. A `did:key` is single-copy and cannot be revoked. There is no issuer, no
 registry, and no rotation. A key in Actions secrets would sign on someone's behalf inside an
@@ -262,9 +267,9 @@ therefore samples roughly a tenth of a day. Each file states its own window in s
 accumulated history reads as a series of samples rather than a continuous record.
 
 The run fails instead of writing a useless file. It stops if the export is empty, if no frames
-decode, or if the decode rejection rate rises far above the measured 0.7% baseline. That last case
-would mean the frame schema moved, which is worth knowing on the day rather than at a quarterly
-review.
+decode, or if the decode rejection rate rises far above the measured 0.7% baseline. In that last case
+it reports the rate, the decoder version and the top rejection reasons. It does not guess at the
+cause.
 
 ---
 

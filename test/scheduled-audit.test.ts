@@ -147,6 +147,16 @@ describe('the scheduled run, offline', () => {
     expect(printed).toHaveLength(1);
     const line = printed[0] ?? '';
     expect(line.startsWith('::error::scheduled-audit: decode rejection rate')).toBe(true);
+    // It states what was measured, the decoder included, and guesses no cause.
+    const installed = JSON.parse(
+      readFileSync(at('node_modules', '@flop-labs', 'tclk', 'package.json'), 'utf8'),
+    ) as { version: string };
+    expect(line).toContain(
+      'tclk lines in the export failed the installed decoder, @flop-labs/tclk ' +
+        installed.version +
+        ', so no findings file was written.',
+    );
+    expect(line).not.toContain('moved');
     expect(line).toContain('x%0A::warning title=spoof::FAKE WARNING%0D%0A');
     expect(line).toContain('%23%23[error]FAKE V1 ERROR');
     expect(line).not.toContain('##[');
