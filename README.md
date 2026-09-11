@@ -78,9 +78,9 @@ exists for the one place that could.
 
 ## It does not implement tclk
 
-[`@flop-labs/tclk`](https://github.com/flop-labs/tclk) is the normative implementation. The spec's
-field tables are generated from the same JSON schema its decoder uses, and decoding is fail-closed.
-An unknown key, a missing field or a malformed value is rejected, never coerced.
+[`@flop-labs/tclk`](https://github.com/flop-labs/tclk) is the normative implementation. This package
+installs its published 0.1.0 release, pinned by `package-lock.json`. Decoding is fail-closed. An
+unknown key, a missing field or a malformed value is rejected, never coerced.
 
 This project imports `decodeFrame`, `openContract` and `applyFrame` instead of reimplementing them.
 A second decoder written from the prose would be a second thing to keep in step with the spec. The
@@ -93,14 +93,25 @@ That decision was checked against live traffic before it was made, not against h
 
 ## Measured against the live ring
 
+This package installs the published `@flop-labs/tclk` 0.1.0. The only findings file in this
+repository is [`findings/20260905T180055Z.md`](findings/20260905T180055Z.md), from 2026-09-05. Every
+workflow run since 2026-09-08 used 0.1.0 and stopped at the rejection ceiling, so there is no newer
+audit from the installed decoder.
+
+---
+
+## Unreleased: measured with a decoder built after 0.1.0
+
+The numbers in this section came from `@flop-labs/tclk` built from its repository after 0.1.0. That
+build is not published. `npm ci` installs 0.1.0, so these numbers cannot be reproduced from this
+repository. The export they came from is not committed either.
+
+0.1.0 rejects `heartbeat` frames and a `reveal` that carries `ref`. The later build accepts both. On
+that build the spec's field tables are generated from `schema/tclk1-frames.schema.json`, the same
+file the decoder uses. That file first appeared after 0.1.0.
+
 Full retained `tclk-offers` export, 2026-09-06. 9,384 records, seq 338318..347701, a 1.2-hour
 window.
-
-**Which decoder produced these.** `@flop-labs/tclk` at repo HEAD, not the published 0.1.0. The
-difference matters and is not cosmetic. 0.1.0 predates the `heartbeat` frame and the optional
-`reveal.ref` field, so it rejects live traffic that the current spec allows. An earlier version of
-this table reported 82 rejections; that figure came from 0.1.0 and counted conforming frames as
-malformed. The numbers below are what the current source accepts.
 
 | | |
 |---|---|
@@ -155,7 +166,8 @@ Anomaly classes by count:
 **Root causes versus cascade.** Once a transition is refused the state does not move, so every later
 frame in that thread is refused too. A lock lands "in status proposed" because the accept before it
 never applied. Counting those separately multiplies one cause into a thread's worth of noise. The
-1,078 raw refusals over this window resolve to 627 root causes and 451 consequences. Only roots are
+1,078 raw refusals over the unreleased-decoder window above resolve to 627 root causes and 451
+consequences. Only roots are
 anomalies. Each consequence carries the seq of the refusal that caused it.
 
 **A warm-up boundary.** An accept whose offer is missing looks like an orphan. Rooms are a ring, so
@@ -214,15 +226,27 @@ npm run demo
 ```
 
 It audits the same fixture three times, with the stub, with Ollama, and with no adapter, then
-compares.
+compares. This is an excerpt of its output with the installed `@flop-labs/tclk` 0.1.0.
 
 ```
-stub adapter      fingerprint 19e573e714e0869f   described 5/5   ledger 5 calls, 0 failed
-ollama adapter    fingerprint 19e573e714e0869f   described 0/5   ledger 5 calls, 5 failed
-no adapter        fingerprint 19e573e714e0869f   described 0/5   ledger 0 calls
+=== stub adapter ===
+  structural fingerprint : 3eb082a6002ab689
+  described / attempted  : 5 / 5   (1ms)
+  ledger                 : 5 calls, 0 failed, 1058 in / 95 out tokens
 
-identical structural fingerprints across all three : true
-byte-identical canonical output                    : true
+=== ollama adapter ===
+  structural fingerprint : 3eb082a6002ab689
+  described / attempted  : 0 / 5   (40ms)
+  ledger                 : 5 calls, 5 failed, 0 in / 0 out tokens
+
+=== no adapter at all ===
+  structural fingerprint : 3eb082a6002ab689
+  described / attempted  : 0 / 5   (0ms)
+  ledger                 : 0 calls, 0 failed, 0 in / 0 out tokens
+
+=== comparison ===
+  identical structural fingerprints across all three : true
+  byte-identical canonical output                    : true
 ```
 
 The fingerprint hashes the whole structural result. The window, the thread count, every status
@@ -232,7 +256,7 @@ all three runs means the audit reached the same conclusions with a model, with a
 and with no model at all. Only the sentence varies. If inference ever leaked into a conclusion the
 hashes would diverge, and the demo exits non-zero.
 
-The Ollama row shows the degradation path. No Ollama is installed on the machine that produced this
+The Ollama run shows the degradation path. No Ollama is installed on the machine that produced this
 output, so its five calls were recorded as failures and the audit finished unchanged. That is the
 case the agent meets most often.
 
