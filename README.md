@@ -106,9 +106,10 @@ The numbers in this section came from `@flop-labs/tclk` built from its repositor
 build is not published. `npm ci` installs 0.1.0, so these numbers cannot be reproduced from this
 repository. The export they came from is not committed either.
 
-0.1.0 rejects `heartbeat` frames and a `reveal` that carries `ref`. The later build accepts both. On
-that build the spec's field tables are generated from `schema/tclk1-frames.schema.json`, the same
-file the decoder uses. That file first appeared after 0.1.0.
+0.1.0 rejects `heartbeat` frames, a `reveal` that carries `ref`, and a `refund` that carries `ref`.
+The later build accepts all three. On that build the spec's field tables are generated from
+`schema/tclk1-frames.schema.json`, the same file the decoder uses. That file first appeared after
+0.1.0.
 
 Full retained `tclk-offers` export, 2026-09-06. 9,384 records, seq 338318..347701, a 1.2-hour
 window.
