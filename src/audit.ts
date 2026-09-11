@@ -34,9 +34,10 @@ export type FindingCode =
    * The machine refused a transition, and no open root in its contract's chain
    * explains it. Severity anomaly, counted in `transitionsRejected`.
    *
-   * The same code at notice level marks a frame whose timestamp did not parse.
-   * That frame was not applied, and is counted in neither total. Count roots by
-   * severity or by `transitionsRejected`, never by this code alone.
+   * Two other findings share this code and are counted in neither total. At
+   * anomaly level, an offer that decoded but would not open a contract. At
+   * notice level, a frame whose timestamp did not parse, which was not applied.
+   * Count roots by `transitionsRejected`, never by this code alone.
    */
   | 'transition-rejected'
   /**
@@ -249,9 +250,11 @@ export function audit(
      * receipt, the status is checked before anything else. A status refusal
      * can therefore hide another fault in the same frame. It is still chained.
      *
-     * A known limit, left for a separate decision. A late copy of a frame that
-     * already applied is refused for the status. STATED [SPEC.md section 4,
-     * 0.1.0]: "Duplicates and replays are rejections without state change".
+     * A known limit, left for a separate decision. A late copy of an accept,
+     * lock, reveal, refund or cancel that already applied is refused for the
+     * status. A receipt copy is accepted again, and an offer copy is not
+     * folded. STATED [SPEC.md section 4, 0.1.0]: "Duplicates and replays are
+     * rejections without state change".
      * When its contract has an open root, the copy is chained to it, so its
      * `causedBy` names an unrelated refusal. With no root open, it is a root.
      * Telling a late copy from a frame still waiting on a refused transition
