@@ -30,9 +30,13 @@ export type Severity = 'info' | 'notice' | 'anomaly';
 export type FindingCode =
   /** A line that looked like a frame and failed the normative decoder. */
   | 'frame-rejected'
-  /** The machine refused a transition, and nothing earlier explains it. */
+  /** The machine refused a transition, and no open root in its contract's chain explains it. */
   | 'transition-rejected'
-  /** A transition failed only because an earlier one did. Reported, not counted. */
+  /**
+   * The machine refused a transition for its contract's status, and an earlier
+   * refusal in the same contract left that status where it was. Reported, not
+   * counted. See the chain rule in `audit`.
+   */
   | 'transition-blocked'
   /** An accept whose offer is not in the window, beyond the warm-up boundary. */
   | 'accept-without-offer'
@@ -53,7 +57,7 @@ export interface Finding {
   /** Plain statement of what the transcript shows. Never a recommendation. */
   readonly detail: string;
   /**
-   * For a blocked transition: the seq of the rejection that caused it.
+   * For a blocked transition: the seq of the open root in its contract's chain.
    * Cascade findings are the only ones that carry this.
    */
   readonly causedBy?: bigint;
@@ -101,6 +105,19 @@ export interface AuditReport {
 }
 
 const DEFAULT_WARMUP_FRACTION = 0.2;
+
+/**
+ * The machine's messages for a frame that arrived in the wrong status for it.
+ * STATED in 0.1.0's machine.js (lines 54, 95, 110, 124, 135 and 147). Every
+ * other refusal names what else was wrong.
+ */
+const STATUS_REFUSAL =
+  /^(accept|lock|reveal|refund|cancel) in status (proposed|accepted|locked|claimed|refunded|cancelled)$/;
+
+function isStatusRefusal(reason: string | undefined): boolean {
+  if (reason === undefined) return false;
+  return STATUS_REFUSAL.test(reason) || reason === 'receipt before a terminal status';
+}
 
 export function audit(
   index: ThreadIndex,
@@ -186,12 +203,13 @@ export function audit(
     }
 
     /**
-     * The cascade rule.
+     * The chain rule: which refusals are root causes and which are their
+     * consequences.
      *
-     * Once a transition is refused the state does not move, so every later
-     * frame is refused too. A lock lands "in status proposed" because the
-     * accept before it never applied. Counting those as separate faults
-     * multiplies one root cause into a thread's worth of noise.
+     * When a transition is refused the state does not move, and a later frame
+     * that needed it is refused for the stale status. A lock lands "in status
+     * proposed" because the accept before it never applied. Counting that lock
+     * as its own fault multiplies one root cause.
      *
      * MEASURED: an early probe of this data mis-parsed timestamps and evaluated
      * every frame at the present moment, which failed 2,757 accepts as "offer
@@ -200,8 +218,26 @@ export function audit(
      * report read as though the ecosystem were broken. It was one bug, seen
      * 7,620 times. The distinction is kept structurally so no future reader
      * has to rediscover it.
+     *
+     * INFERRED, and this package's own decision. Neither tclk's SPEC.md nor
+     * technocore.chat says when a refusal is the consequence of an earlier one.
+     *   - Chains are kept per contract, the id each frame names. STATED [SPEC.md
+     *     section 4, 0.1.0]: the machine runs "Per contract". A thread keyed on
+     *     an offer id can hold frames that name several.
+     *   - A refusal for any reason other than status is an anomaly, always, and
+     *     carries no `causedBy`. When its contract has no open root, it becomes
+     *     one.
+     *   - A status refusal is a consequence of its contract's open root, when
+     *     there is one. The root stays open until that contract's status moves.
+     *   - A status refusal with no open root is an anomaly and opens a root.
+     *     So a status refusal after a transition that moved the status starts
+     *     a new chain instead of joining the old one.
+     *
+     * STATED in 0.1.0's machine.js: for lock, reveal, refund, cancel and
+     * receipt, the status is checked before anything else. A status refusal
+     * can therefore hide another fault in the same frame. It is still chained.
      */
-    let firstRejectionSeq: bigint | null = null;
+    const openRoots = new Map<string, bigint>();
 
     for (const record of thread.frames) {
       if (record.frame.type === 'offer') continue;
@@ -217,24 +253,17 @@ export function audit(
         continue;
       }
 
+      const contract = record.frame.contract;
       const step = applyFrame(state, record.frame, record.tsMs);
       if (step.ok) {
         accepted += 1;
+        if (step.state.status !== state.status) openRoots.delete(contract);
         state = step.state;
         continue;
       }
 
-      if (firstRejectionSeq === null) {
-        rejected += 1;
-        firstRejectionSeq = record.seq;
-        threadFindings.push({
-          code: 'transition-rejected',
-          severity: 'anomaly',
-          subject: thread.key,
-          seq: record.seq,
-          detail: `${record.frame.type} refused: ${step.reason ?? 'no reason given'}`,
-        });
-      } else {
+      const root = openRoots.get(contract);
+      if (root !== undefined && isStatusRefusal(step.reason)) {
         blocked += 1;
         threadFindings.push({
           code: 'transition-blocked',
@@ -242,7 +271,17 @@ export function audit(
           subject: thread.key,
           seq: record.seq,
           detail: `${record.frame.type} refused: ${step.reason ?? 'no reason given'}`,
-          causedBy: firstRejectionSeq,
+          causedBy: root,
+        });
+      } else {
+        rejected += 1;
+        if (root === undefined) openRoots.set(contract, record.seq);
+        threadFindings.push({
+          code: 'transition-rejected',
+          severity: 'anomaly',
+          subject: thread.key,
+          seq: record.seq,
+          detail: `${record.frame.type} refused: ${step.reason ?? 'no reason given'}`,
         });
       }
     }
