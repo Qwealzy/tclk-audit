@@ -88,8 +88,17 @@ exists for the one place that could.
 ## It does not implement tclk
 
 [`@flop-labs/tclk`](https://github.com/flop-labs/tclk) is the normative implementation. This package
-installs its published 0.1.0 release, pinned by `package-lock.json`. Decoding is fail-closed. An
-unknown key, a missing field or a malformed value is rejected, never coerced.
+installs its published 0.1.0 release, pinned by `package-lock.json`. Its spec says decoding is
+fail-closed, and that an unknown key, a missing field or a malformed value is rejected, never coerced.
+
+0.1.0 does coerce in two places, found by probing on 2026-09-11. It looks a frame's `type` up by its
+string form, so a type of `["lock"]` decodes as a lock. The checks on a lock's own fields then never
+run, and `applyFrame` returns nothing for such a frame. It reads a receipt's `outcome` by its string
+form too. Until this tool checked for it, one such frame in a deal room, or on the board after an
+accept the machine refused, stopped the scheduled run with a TypeError before it wrote anything. Now
+each decoded frame is checked against the JavaScript types tclk declares. One that fails is refused,
+and counted apart from the decoder's refusals. The check covers types only. Every rule about values is
+still the decoder's.
 
 This project imports `decodeFrame`, `openContract` and `applyFrame` instead of reimplementing them.
 A second decoder written from the prose would be a second thing to keep in step with the spec. The
@@ -347,7 +356,7 @@ cause.
 
 ```bash
 npm install
-npm test          # 96 tests, against a fixture of real frames and signed synthetic contracts
+npm test          # 234 tests, against a fixture of real frames and signed synthetic contracts
 npm run demo      # the three-way comparison
 npm run build
 node examples/live-run.mjs
