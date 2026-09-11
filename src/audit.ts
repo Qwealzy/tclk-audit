@@ -33,9 +33,10 @@ export type FindingCode =
   /** The machine refused a transition, and no open root in its contract's chain explains it. */
   | 'transition-rejected'
   /**
-   * The machine refused a transition for its contract's status, and an earlier
-   * refusal in the same contract left that status where it was. Reported, not
-   * counted. See the chain rule in `audit`.
+   * The machine refused a transition for the status it was in, and an earlier
+   * refusal on the same contract opened a root in that same status. The
+   * status belongs to the offer's machine. Reported, not counted. See the
+   * chain rule in `audit`.
    */
   | 'transition-blocked'
   /** An accept whose offer is not in the window, beyond the warm-up boundary. */
