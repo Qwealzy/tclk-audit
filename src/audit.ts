@@ -161,8 +161,8 @@ export function audit(
       severity: 'notice',
       subject: `seq ${rejection.seq}`,
       seq: rejection.seq,
-      // The decoder's own words. Rewording them would lose the field name,
-      // which is the only actionable part.
+      // The refusal as scanRecords rebuilt it. The decoder's fixed text is
+      // kept, and every part a stranger chose is shown as its length and hash.
       detail: `${rejection.reason} (from ${rejection.from})`,
     });
   }

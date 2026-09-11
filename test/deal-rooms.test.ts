@@ -17,6 +17,7 @@ import { buildThreads, recomputedContractId } from '../src/threads.js';
 import { audit } from '../src/audit.js';
 import { bindContracts, routeFrames } from '../src/deal-rooms.js';
 import { Follower } from '../src/follow.js';
+import { slot } from './support/slot.js';
 
 /**
  * Deal rooms, the room each frame belongs in, and contract ids.
@@ -384,18 +385,20 @@ describe('(e) known decoder gaps', () => {
 
   it('labels heartbeat, reveal.ref and refund.ref as known gaps, apart from rejections', () => {
     expect(scan?.knownGaps.map((g) => g.gap)).toEqual(['heartbeat', 'reveal.ref', 'refund.ref']);
+    // The gap is found from the decoder's raw message. The reason shown is
+    // rebuilt like any other, so the field names appear as length and hash.
     expect(scan?.knownGaps.map((g) => g.reason)).toEqual([
-      'tclk: unknown frame type: heartbeat',
-      'tclk: unknown field on reveal: ref',
-      'tclk: unknown field on refund: ref',
+      `tclk: unknown frame type: ${slot('heartbeat')}`,
+      `tclk: unknown field on reveal: ${slot('ref')}`,
+      `tclk: unknown field on refund: ${slot('ref')}`,
     ]);
-    expect(scan?.rejections.map((x) => x.reason)).toEqual(['tclk: unknown field on lock: foo']);
+    expect(scan?.rejections.map((x) => x.reason)).toEqual([`tclk: unknown field on lock: ${slot('foo')}`]);
   });
 
   it('keeps known gaps out of the rejected-frame findings', () => {
     const rejected = r.dealReport.findings.filter((f) => f.code === 'frame-rejected');
     expect(rejected).toHaveLength(1);
-    expect(rejected[0]?.detail).toContain('unknown field on lock: foo');
+    expect(rejected[0]?.detail).toContain(`unknown field on lock: ${slot('foo')}`);
     expect(r.dealReport.byStatus).toEqual({ locked: 1 });
   });
 

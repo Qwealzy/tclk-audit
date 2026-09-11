@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describeFinding, describeFindings } from '../src/describe.js';
+import { parseExportLine, scanRecords, type RoomRecord } from '../src/frames.js';
+import { buildThreads } from '../src/threads.js';
+import { audit } from '../src/audit.js';
 import { containsAdvice } from '../src/advice-guard.js';
 import { StubAdapter } from '../src/inference/stub.js';
 import { OllamaAdapter } from '../src/inference/ollama.js';
@@ -7,6 +12,8 @@ import { AdapterUnavailableError } from '../src/inference/types.js';
 import { withAccounting, MemoryLedger, summarise } from '../src/inference/ledger.js';
 import type { InferenceAdapter, InferenceRequest } from '../src/inference/types.js';
 import type { Finding } from '../src/audit.js';
+
+const CRAFTED = fileURLToPath(new URL('./fixtures/crafted-rejections.jsonl', import.meta.url));
 
 const FINDING: Finding = {
   code: 'transition-rejected',
@@ -95,6 +102,33 @@ describe('the model is given the finding, never the frames', () => {
     // Nothing from a frame: no amounts, assets, rails, deadlines or DIDs.
     for (const leaked of ['amount', 'asset', 'rails', 'refundAfterMs', 'claimByMs', 'did:key:']) {
       expect(prompt).not.toContain(leaked);
+    }
+  });
+
+  it('never receives the text a stranger put in a refused frame', async () => {
+    // The API, not the demo. The demo sends only anomaly-level findings, and
+    // nothing stops a caller from describing a refusal. These five frames put
+    // their attack in a field name, a field value, the frame type, and a field
+    // name of over 3,000 characters.
+    const crafted = readFileSync(CRAFTED, 'utf8')
+      .split(/\r?\n/)
+      .filter((l) => l.length > 0)
+      .map((l) => parseExportLine(l))
+      .filter((r): r is RoomRecord => r !== null);
+    const scan = scanRecords(crafted);
+    const report = audit(buildThreads(scan.frames), scan.rejections, { nowMs: 0 });
+    const refusals = report.findings.filter((f) => f.code === 'frame-rejected');
+    expect(refusals).toHaveLength(5);
+
+    for (const finding of refusals) {
+      const { adapter, seen } = recordingAdapter('A frame was refused.');
+      await describeFinding(finding, { adapter });
+      expect(seen).toHaveLength(1);
+      const sent = JSON.stringify(seen[0]);
+      expect(sent).toContain('bytes, sha256:');
+      for (const fragment of ['INJECTED', 'FAKE', 'gnore previous', 'safe to accept', 'legitimate', '::warning', '##[']) {
+        expect(sent).not.toContain(fragment);
+      }
     }
   });
 

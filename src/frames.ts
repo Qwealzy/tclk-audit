@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { isTclkLine, tryDecodeFrame, decodeFrame, type TclkFrame } from '@flop-labs/tclk';
 import { parseRoomPage, verifyStoredMessage } from 'technocore-client';
 
@@ -97,9 +98,9 @@ export interface FrameRejection {
   /** The sender, after `sanitizeReason`. See `FrameRecord.from`. */
   readonly from: string;
   /**
-   * The decoder's own message, after `sanitizeReason`. Never reworded, so it
-   * still names the exact field. Characters that could act on an output
-   * surface are percent-encoded.
+   * The decoder's refusal, rebuilt by `rebuildRefusal`. It keeps the decoder's
+   * fixed text, and every part a stranger chose appears only as
+   * `<N bytes, sha256:HEX>`. Then it goes through `sanitizeReason`.
    */
   readonly reason: string;
 }
@@ -311,34 +312,132 @@ function exactNonce(nonce: string | number | undefined): string | null {
  * the reason. Calling both is the only way to get a null result and an
  * explanation, and the explanation is the whole value of a rejection record.
  *
- * Every path out goes through `sanitizeReason`, so no caller ever holds the
- * raw message. The known-gap check reads the raw message, before it is encoded.
+ * Every path out goes through `rebuildRefusal` and then `sanitizeReason`, so
+ * no caller ever holds the raw message. The known-gap check reads the raw
+ * message, which is never returned.
  */
 function rejectionReason(text: string): { reason: string; gap: DecoderGap | undefined } {
   let raw: string;
   try {
     decodeFrame(text);
-    raw = 'decoder disagreed with itself between tryDecodeFrame and decodeFrame';
+    return {
+      reason: 'decoder disagreed with itself between tryDecodeFrame and decodeFrame',
+      gap: undefined,
+    };
   } catch (error) {
     raw = error instanceof Error ? error.message : String(error);
   }
-  return { reason: sanitizeReason(raw), gap: KNOWN_DECODER_GAPS.get(raw) };
+  return { reason: sanitizeReason(rebuildRefusal(raw)), gap: KNOWN_DECODER_GAPS.get(raw) };
 }
 
 const UTF8 = new TextEncoder();
+
+/**
+ * Text a stranger chose, shown without the text: `<N bytes, sha256:HEX>`.
+ *
+ * N is the length of its UTF-8 bytes and HEX the full SHA-256 of them. The
+ * same text always gives the same slot, so repeats still count together, and a
+ * reader with a guess can hash the guess and compare. A lone surrogate has no
+ * UTF-8 form. It is encoded as U+FFFD first.
+ */
+function hidden(text: string): string {
+  const bytes = UTF8.encode(text);
+  return `<${bytes.length} bytes, sha256:${createHash('sha256').update(bytes).digest('hex')}>`;
+}
+
+// The closed lists the decoder draws its own words from, copied from 0.1.0's
+// dist/frames.js. A word in a refusal is kept only if it is on one of these.
+
+/** `record.type` in requireKeys: a frame type, or the two nested records. */
+const KEY_OWNERS = ['offer', 'accept', 'lock', 'reveal', 'refund', 'cancel', 'receipt', 'job', 'presig'];
+
+/** Names passed to requireString with a pattern, so its refusal repeats the value. */
+const MALFORMED_NAMES = [
+  'from', 'amount', 'asset', 'rail', 'nonce', 'ref', 'statement', 'contract', 'secret',
+  'presig.nonce', 'presig.s', 'job.proto', 'paymentKey',
+];
+
+/** Every name in a `required` list, so every key a "missing field" refusal can name. */
+const REQUIRED_KEYS = [
+  'from', 'role', 'amount', 'asset', 'lock', 'rails', 'claimByMs', 'refundAfterMs',
+  'expiresMs', 'nonce', 'id', 'ref', 'statement', 'contract', 'rail', 'secret', 'outcome',
+  'proto', 's',
+];
+
+/** Every refusal on the decode path with no part a stranger chose. */
+const FIXED_REFUSALS: ReadonlySet<string> = new Set([
+  'not a tclk/1 line',
+  'frame is not valid JSON',
+  'frame must be an object',
+  'job must be an object',
+  'frame contains an unsupported value',
+  'role must be payer|payee',
+  'lock must be hash|point',
+  'rails must be a non-empty array',
+  'claimByMs must be strictly before refundAfterMs',
+  'point locks require paymentKey',
+  'presig must be an object',
+  'outcome must be claimed|refunded|cancelled',
+  'paymentKey is not a valid secp256k1 point',
+  ...KEY_OWNERS.flatMap((owner) => REQUIRED_KEYS.map((key) => `missing field on ${owner}: ${key}`)),
+  ...[...MALFORMED_NAMES, 'reason', 'job.id', 'job.context'].map((name) => `${name} must be a non-empty string`),
+  ...['claimByMs', 'refundAfterMs', 'expiresMs'].map((name) => `${name} must be a positive unix-ms integer`),
+].map((message) => `tclk: ${message}`));
+
+/**
+ * The templates whose last part is text a stranger chose, as the fixed text
+ * that comes before it. That part always comes last, after text the decoder
+ * wrote, so the prefix cannot be forged by it.
+ */
+const PREFIXED_REFUSALS: readonly string[] = [
+  'tclk: unknown frame type: ',
+  ...KEY_OWNERS.map((owner) => `tclk: unknown field on ${owner}: `),
+  ...MALFORMED_NAMES.map((name) => `tclk: ${name} is malformed: `),
+];
+
+/**
+ * Rebuilds a decoder refusal so that no text a stranger chose survives in it.
+ *
+ * STATED in 0.1.0's dist/frames.js (line 31): every refusal is thrown as
+ * `new Error("tclk: " + msg)`, and the decoder gives no other form. So the
+ * refusal is matched against every template the decode path can produce
+ * (dist/frames.js lines 36 to 315), and a new message is built from this
+ * module's own copy of the fixed text.
+ *   - A refusal with no stranger's part is kept, but only when it equals one
+ *     of `FIXED_REFUSALS`, all of which this module wrote out itself.
+ *   - A field name, a field value or a frame type becomes `hidden(...)`, however
+ *     harmless it looks. That also bounds the length, since only the byte
+ *     count is printed.
+ *   - The offer id mismatch carries a hash the decoder computed. It is kept
+ *     only when it is exactly `0x` and 64 lowercase hex digits.
+ *   - Anything else is hidden whole.
+ *
+ * This deliberately gives up an earlier rule, that the decoder's own words are
+ * never reworded. The words a stranger chose were the part of them that could
+ * reach a reader, a CI log, a model prompt or a room.
+ */
+export function rebuildRefusal(raw: string): string {
+  if (FIXED_REFUSALS.has(raw)) return raw;
+  const mismatch = /^tclk: offer id mismatch \(expected (0x[0-9a-f]{64})\)$/.exec(raw);
+  if (mismatch !== null) return `tclk: offer id mismatch (expected ${mismatch[1]})`;
+  for (const prefix of PREFIXED_REFUSALS) {
+    if (raw.startsWith(prefix)) return prefix + hidden(raw.slice(prefix.length));
+  }
+  return `tclk: refusal in a form this reader does not know, ${hidden(raw)}`;
+}
 
 /** Printable ASCII that still has to be encoded. See `sanitizeReason`. */
 const ENCODED_ASCII: ReadonlySet<string> = new Set(['%', '`', '|', '#']);
 
 /**
- * Makes a rejection reason inert on every surface that prints it.
+ * Makes a string inert on every surface that prints it.
  *
- * The reason is the decoder's error message, and the decoder repeats an
- * unknown field name word for word. Whoever posted the frame chose that name.
- * It can carry line breaks, Markdown, and lines the GitHub runner reads as
- * workflow commands. This runs once, where the reason is produced, so the
- * findings file, the CI log and any later output all read the same string.
- * `scanRecords` passes each sender through it too.
+ * For a rejection reason this is a second layer. `rebuildRefusal` has already
+ * replaced every part a stranger chose, so what remains is text this package
+ * wrote. `scanRecords` passes each sender through it too, and a sender is not
+ * rebuilt. It can carry line breaks, Markdown, and lines the GitHub runner
+ * reads as workflow commands. This runs once, where the string is produced, so
+ * the findings file, the CI log and any later output all read the same string.
  *
  * Percent-encoded as UTF-8:
  *   - every character outside printable ASCII. This includes GitHub's

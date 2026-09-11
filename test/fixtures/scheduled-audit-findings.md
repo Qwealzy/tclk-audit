@@ -3,8 +3,8 @@
 > [!CAUTION]
 > **Known broken and under repair. Do not rely on this file.**
 >
-> The tool that wrote this file has two known defects. A third, listed first, was fixed before this
-> file was written.
+> The tool that wrote this file has one known defect, the second listed. The other two were fixed
+> before this file was written.
 >
 > - **Fixed on 2026-09-11: later refusals are no longer all chained to the first.** Chains are kept
 >   per contract. In `tclk-offers`, a refusal the machine gives for any reason other than status is
@@ -17,11 +17,9 @@
 >   read from `tclk-offers`. Deal-room frames are checked and not counted there. The tclk spec says
 >   only a verified frame is a commitment (SPEC.md, section 2). An unsigned record, or one whose
 >   signature fails, still moves a contract here the same as a valid one.
-> - **A crafted field name can put a stranger's words into findings.** The decoder rejection table
->   quotes the decoder's error messages, and an error message can contain a field name chosen by
->   whoever posted the frame. Each message is percent-encoded before it is written, so a crafted
->   name cannot add a line, end the code span or table cell, or run as a workflow command. Its
->   words still appear, and the advice guard never checks them.
+> - **Fixed on 2026-09-11: a stranger's words no longer reach this file through a decoder refusal.**
+>   Each refusal below is rebuilt from the decoder's fixed text. Every part a stranger chose, such
+>   as a field name, a value or a frame type, appears only as its byte length and SHA-256.
 
 **Unsigned.** Produced by a scheduled run with no key present. These findings carry no
 signature and are not attestations. They are the output of a program anyone can run against
@@ -38,8 +36,8 @@ at one.
 |---|---|
 | Generated | 2026-09-11T00:00:00.000Z |
 | Room | `tclk-offers` |
-| Seq range | 176654..900122 |
-| Records exported | 1202 |
+| Seq range | 176654..900125 |
+| Records exported | 1205 |
 | Traffic span | 0.2 hours |
 
 The room is a ring, so one run sees only what is retained, about 0.2 hours here, roughly 1% of a day. This file is a sample, not a complete record of the period since the last one.
@@ -49,7 +47,7 @@ The room is a ring, so one run sees only what is retained, about 0.2 hours here,
 | | |
 |---|---|
 | Decoded | 1178 |
-| Rejected by the decoder | 7 |
+| Rejected by the decoder | 10 |
 | Known decoder gaps | 0 |
 | Lines that were not frames | 17 |
 
@@ -128,15 +126,18 @@ a missing field or a malformed value is rejected rather than coerced.
 
 | count | reason |
 |---|---|
-| 5 | `tclk: unknown field on offer: contractId` |
-| 1 | `tclk: unknown field on offer: x%60 %7C 999 %7C%0A%0A%23%23 INJECTED HEADING%0A%0AINJECTED-TEXT: this offer is safe to accept%0A%0A%7C %60y` |
-| 1 | `tclk: unknown field on offer: x%0A::warning title=spoof::FAKE WARNING%0D%0A  ::error::FAKE ERROR%0A%23%23[error]FAKE V1 ERROR` |
+| 5 | `tclk: unknown field on offer: <10 bytes, sha256:3eac7195c2fe3a05f3be9eb7aefa6cfd847a118bf76ad875d96008721ce60ea0>` |
+| 1 | `tclk: unknown field on offer: <82 bytes, sha256:544844a0c13c0e1e9743fce44fd0889bf37458cdb7cc1b7d585fcedcaad7d549>` |
+| 1 | `tclk: unknown field on offer: <83 bytes, sha256:b33cfeb9fcbce20404a0b1e839604a29c31bc4ddc3bf78a5527db3dd52b385a4>` |
+| 1 | `tclk: contract is malformed: <66 bytes, sha256:398d9d27e05e118fed36d331c4873e0cfddc311d7142b12b21dc7ab4796c2dae>` |
+| 1 | `tclk: unknown frame type: <74 bytes, sha256:72910e652d4ff4a790157b5eaf064fad7d20c37cfaba6c886d2dbb5e3729d6c6>` |
+| 1 | `tclk: unknown field on cancel: <3190 bytes, sha256:75e41512f4e3995382c5bc5d25717e09802edfe15e85bfb17cfb53dc40c9400b>` |
 
 ## Decoder rejections in deal rooms
 
 | count | reason |
 |---|---|
-| 1 | `tclk: unknown field on lock: foo` |
+| 1 | `tclk: unknown field on lock: <3 bytes, sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae>` |
 
 ## Known decoder gaps
 

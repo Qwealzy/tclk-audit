@@ -69,9 +69,18 @@ export interface DescribeResult {
  * Renders the finding into the prompt.
  *
  * Everything passed here comes from the auditor's own structured output, never
- * from a room message. `detail` is assembled from fixed strings and the
- * decoder's own error text, so no stranger's content reaches the model through
- * this path.
+ * from a room message. No text a stranger put in a refused frame reaches the
+ * model. `scanRecords` rebuilds each decoder refusal from the decoder's fixed
+ * text, and a field name, a field value or a frame type appears only as its
+ * byte length and SHA-256 (`rebuildRefusal` in frames.ts). A test sends such
+ * findings through here and checks the request.
+ *
+ * Two strings a stranger chose can still reach a detail line. A rejected
+ * frame's sender is appended as `(from ...)`. It is a did:key, or a name the
+ * live service limits to lowercase letters, digits, `_` and `-`, and this
+ * reader only percent-encodes it. And the state machine repeats a rail name in
+ * "rail X was not offered". The decoder has already limited that name to
+ * lowercase letters, digits, `.`, `_` and `-`.
  */
 function promptFor(finding: Finding): string {
   return [

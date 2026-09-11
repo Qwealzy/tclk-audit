@@ -82,8 +82,8 @@ const KNOWN_DEFECTS_BANNER = [
   '> [!CAUTION]',
   '> **Known broken and under repair. Do not rely on this file.**',
   '>',
-  '> The tool that wrote this file has two known defects. A third, listed first, was fixed before this',
-  '> file was written.',
+  '> The tool that wrote this file has one known defect, the second listed. The other two were fixed',
+  '> before this file was written.',
   '>',
   '> - **Fixed on 2026-09-11: later refusals are no longer all chained to the first.** Chains are kept',
   `>   per contract. In \`${ROOM}\`, a refusal the machine gives for any reason other than status is`,
@@ -96,11 +96,9 @@ const KNOWN_DEFECTS_BANNER = [
   `>   read from \`${ROOM}\`. Deal-room frames are checked and not counted there. The tclk spec says`,
   '>   only a verified frame is a commitment (SPEC.md, section 2). An unsigned record, or one whose',
   '>   signature fails, still moves a contract here the same as a valid one.',
-  "> - **A crafted field name can put a stranger's words into findings.** The decoder rejection table",
-  ">   quotes the decoder's error messages, and an error message can contain a field name chosen by",
-  '>   whoever posted the frame. Each message is percent-encoded before it is written, so a crafted',
-  '>   name cannot add a line, end the code span or table cell, or run as a workflow command. Its',
-  '>   words still appear, and the advice guard never checks them.',
+  "> - **Fixed on 2026-09-11: a stranger's words no longer reach this file through a decoder refusal.**",
+  ">   Each refusal below is rebuilt from the decoder's fixed text. Every part a stranger chose, such",
+  '>   as a field name, a value or a frame type, appears only as its byte length and SHA-256.',
 ];
 
 /**

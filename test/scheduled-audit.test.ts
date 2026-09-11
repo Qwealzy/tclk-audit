@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { OFFER_ROOM } from '@flop-labs/tclk';
 import { parseExportLine, scanRecords, type RoomRecord } from '../src/frames.js';
 import { bindContracts } from '../src/deal-rooms.js';
+import { slot } from './support/slot.js';
 
 /**
  * The scheduled run, end to end and offline.
@@ -30,11 +31,12 @@ import { bindContracts } from '../src/deal-rooms.js';
  * under node_modules/.cache. It runs against the current source, whatever
  * dist/ holds.
  *
- * The input is the committed fixture plus two crafted rejections. Their field
- * names are the ones that broke the findings table and wrote runner commands
- * before rejection reasons were encoded. The expected file was recorded from
- * the same run. When the script or its banner changes on purpose, record it
- * again and check the diff.
+ * The input is the committed fixture plus five crafted rejections. The first
+ * two carry the field names that broke the findings table and wrote runner
+ * commands before rejection reasons were encoded. The other three put the
+ * attack in a field value, in the frame type, and in a field name of over
+ * 3,000 characters. The expected file was recorded from the same run. When the
+ * script or its banner changes on purpose, record it again and check the diff.
  *
  * Every deal room exports as empty except one. test/fixtures/
  * deal-room-synthetic.jsonl is six records in the deal room of the first
@@ -156,7 +158,26 @@ describe('the scheduled run, offline', () => {
     expect(written).toBe(expected);
   }, 60_000);
 
+  /**
+   * The reason each crafted record should get, from the part of it a stranger
+   * chose. The first two carry a crafted field name, the third a crafted
+   * contract value, the fourth a crafted frame type, the fifth a field name of
+   * over 3,000 characters.
+   */
+  function craftedReasons(): string[] {
+    const offerKeys = new Set(['amount', 'asset', 'claimByMs', 'expiresMs', 'from', 'id', 'job', 'lock', 'nonce', 'rails', 'refundAfterMs', 'role', 'type']);
+    return crafted.map((line, i) => {
+      const frame = JSON.parse((JSON.parse(line) as { text: string }).text.slice(6)) as Record<string, unknown>;
+      const keys = Object.keys(frame);
+      if (i < 2) return `tclk: unknown field on offer: ${slot(keys.find((k) => !offerKeys.has(k)) ?? '')}`;
+      if (i === 2) return `tclk: contract is malformed: ${slot(String(frame['contract']))}`;
+      if (i === 3) return `tclk: unknown frame type: ${slot(String(frame['type']))}`;
+      return `tclk: unknown field on cancel: ${slot(keys.find((k) => k.length > 3000) ?? '')}`;
+    });
+  }
+
   it('stops at the rejection ceiling, writes nothing, and prints one inert error line', () => {
+    expect(crafted).toHaveLength(5);
     // Sixty copies of each crafted rejection take the rate past the 5% ceiling.
     const many = crafted.flatMap((line, i) =>
       Array.from({ length: 60 }, (_, n) => {
@@ -187,8 +208,13 @@ describe('the scheduled run, offline', () => {
         ', so no findings file was written.',
     );
     expect(line).not.toContain('moved');
-    expect(line).toContain('x%0A::warning title=spoof::FAKE WARNING%0D%0A');
-    expect(line).toContain('%23%23[error]FAKE V1 ERROR');
-    expect(line).not.toContain('##[');
+    // Each crafted refusal is there, as fixed text with the stranger's part
+    // shown only as its length and hash.
+    for (const reason of craftedReasons()) expect(line).toContain(`60x ${reason}`);
+    // None of what the strangers wrote is.
+    for (const fragment of ['INJECTED', 'FAKE', 'gnore previous', '::warning', '##[', 'safe to accept', 'legitimate']) {
+      expect(line).not.toContain(fragment);
+    }
+    expect(line).toMatch(/^[\x20-\x7e]+$/);
   }, 60_000);
 });
