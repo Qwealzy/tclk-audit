@@ -310,7 +310,7 @@ cause.
 
 ```bash
 npm install
-npm test          # 76 tests, against a fixture of real frames and signed synthetic contracts
+npm test          # 79 tests, against a fixture of real frames and signed synthetic contracts
 npm run demo      # the three-way comparison
 npm run build
 node examples/live-run.mjs

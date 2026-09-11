@@ -1,11 +1,4 @@
-import {
-  OFFER_ROOM,
-  TCLK_TERMINAL_STATUSES,
-  applyFrame,
-  dealRoom,
-  openContract,
-  type ContractState,
-} from '@flop-labs/tclk';
+import { OFFER_ROOM, dealRoom } from '@flop-labs/tclk';
 import { roomName, type Transport } from 'technocore-client';
 import { parseExportLine, scanRecords, type FrameRecord, type RoomRecord, type ScanResult } from './frames.js';
 import { buildThreads, recomputedContractId, type ContractThread, type ThreadIndex } from './threads.js';
@@ -75,58 +68,36 @@ export interface Bindings {
  * the deal room it leads to.
  *
  * Each accept whose offer is on the board is recomputed with
- * `recomputedContractId`. A mismatch is reported in `mismatches` and never
- * applied, so it gives no deal room. The state machine checks the same thing,
- * and this check does not rely on it. An accept whose offer is not on the board
- * cannot be recomputed, so it gives no deal room either.
+ * `recomputedContractId`. A mismatch is reported in `mismatches`, and such an
+ * accept gives no deal room. The state machine checks the same thing, and this
+ * check does not rely on it. An accept whose offer is not on the board cannot
+ * be recomputed, so it gives no deal room either.
  *
- * Every other frame before the binding accept is applied the way the fold in
- * audit.ts applies it, in room order, skipping a frame whose time did not
- * parse. So the accept found here is the one that fold accepts. A cancel from
- * the offerer before any accept closes the offer, and then nothing binds.
+ * Which accept the machine takes is `ContractThread.accept`, from
+ * `buildThreads`. The thread's contract id and the board's status come from
+ * that same decision, so the deal room does too. The room is derived from the
+ * id recomputed here for that accept. A cancel from the offerer before any
+ * accept closes the offer, and then nothing binds.
  */
 export function bindContracts(board: readonly FrameRecord[]): Bindings {
   const index = buildThreads(board);
-
-  const offers = new Map<string, FrameRecord>();
-  for (const thread of index.threads) if (thread.offer !== null) offers.set(thread.key, thread.offer);
-
   const mismatches: ContractMismatch[] = [];
-  const recomputed = new Map<FrameRecord, string>();
+  const bindings: ContractBinding[] = [];
+
   for (const thread of index.threads) {
+    const offer = thread.offer;
+    if (offer === null || offer.frame.type !== 'offer') continue;
     for (const record of thread.frames) {
       if (record.frame.type !== 'accept') continue;
-      const offer = offers.get(record.frame.ref);
-      if (offer === undefined || offer.frame.type !== 'offer') continue;
       const id = recomputedContractId(offer.frame, record.frame);
-      recomputed.set(record, id);
       if (id !== record.frame.contract) mismatches.push({ accept: record, recomputed: id });
     }
-  }
 
-  const bindings: ContractBinding[] = [];
-  for (const thread of index.threads) {
-    if (thread.offer === null || thread.offer.frame.type !== 'offer') continue;
-    let state: ContractState;
-    try {
-      state = openContract(thread.offer.frame);
-    } catch {
-      continue;
-    }
-    for (const record of thread.frames) {
-      if (record.frame.type === 'offer') continue;
-      if (!Number.isFinite(record.tsMs)) continue;
-      const id = record.frame.type === 'accept' ? recomputed.get(record) : undefined;
-      if (record.frame.type === 'accept' && id !== record.frame.contract) continue;
-      const step = applyFrame(state, record.frame, record.tsMs);
-      if (!step.ok) continue;
-      state = step.state;
-      if (id !== undefined && state.contract === id) {
-        bindings.push({ key: thread.key, offer: thread.offer, accept: record, contract: id, room: dealRoom(id) });
-        break;
-      }
-      if (TCLK_TERMINAL_STATUSES.has(state.status)) break;
-    }
+    const accept = thread.accept;
+    if (accept === null || accept.frame.type !== 'accept') continue;
+    const id = recomputedContractId(offer.frame, accept.frame);
+    if (id !== accept.frame.contract) continue;
+    bindings.push({ key: thread.key, offer, accept, contract: id, room: dealRoom(id) });
   }
 
   bindings.sort((a, b) => compareSeq(a.accept, b.accept));
@@ -214,6 +185,7 @@ export function routeFrames(
     threads.push({
       key: binding.key,
       offer: binding.offer,
+      accept: binding.accept,
       contractId: binding.contract,
       frames: [binding.offer, binding.accept, ...later],
       firstSeq: binding.offer.seq,

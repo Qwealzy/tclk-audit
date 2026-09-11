@@ -313,6 +313,63 @@ describe('(d) an accept whose contract field is not the recomputed id', () => {
   });
 });
 
+describe('the accept the state machine takes', () => {
+  /** An accept built by hand, so it can be one the builder refuses. Its id recomputes. */
+  function acceptBy(d: Deal, from: string, statement: string, nonce: string): AcceptFrame {
+    const bare: AcceptFrame = { type: 'accept', from, ref: d.offer.id, statement, nonce, contract: '' };
+    return { ...bare, contract: recomputedContractId(d.offer, bare) };
+  }
+
+  /**
+   * The first accept recomputes and the machine refuses it, for `reason`. The
+   * second is the payee's valid accept. The thread, the board's status and the
+   * deal room must all follow the second.
+   */
+  function refusedThenValid(d: Deal, first: RoomRecord, reason: string) {
+    const board = [
+      post(d.payer, OFFER_ROOM, 1, 0, encodeFrame(d.offer)),
+      first,
+      post(d.payee, OFFER_ROOM, 3, 2, encodeFrame(d.accept)),
+    ];
+    const deal = [post(d.payer, d.room, 1, 3, lockOf(d)), post(d.payee, d.room, 2, 4, revealOf(d))];
+    const r = run(board, new Map([[d.room, deal]]));
+    const [thread] = buildThreads(r.boardScan.frames).threads;
+
+    expect(r.boardReport.findings.map((f) => f.detail)).toContain(reason);
+    expect(thread?.accept?.seq).toBe(3n);
+    expect(thread?.contractId).toBe(d.contract);
+    expect(r.bindings.map((b) => [b.accept.seq, b.room])).toEqual([[3n, d.room]]);
+    // The board's status comes from the same decision as the thread's id.
+    expect(r.boardReport.byStatus).toEqual({ accepted: 1 });
+    expect(r.boardReport.outcomes[0]?.state?.contract).toBe(thread?.contractId);
+    expect(r.dealReport.byStatus).toEqual({ claimed: 1 });
+  }
+
+  it('passes over the offerer own accept', () => {
+    const d = newDeal();
+    const own = acceptBy(d, d.payer.did, d.accept.statement, 'aaaaaaaaaaaaaaaa');
+    refusedThenValid(d, post(d.payer, OFFER_ROOM, 2, 1, encodeFrame(own)), 'accept refused: cannot accept own offer');
+  });
+
+  it('passes over an accept whose statement does not fit the lock', () => {
+    const d = newDeal();
+    const odd = acceptBy(d, d.payee.did, '0x02' + 'ab'.repeat(32), 'bbbbbbbbbbbbbbbb');
+    refusedThenValid(
+      d,
+      post(d.payee, OFFER_ROOM, 2, 1, encodeFrame(odd)),
+      'accept refused: statement does not fit a hash lock',
+    );
+  });
+
+  it('passes over an accept whose timestamp does not parse', () => {
+    const d = newDeal();
+    const early = makeAccept(d.offer, { from: d.payee.did, statement: d.accept.statement });
+    // The signature covers room, nonce and text. The timestamp is the venue's.
+    const record = { ...post(d.payee, OFFER_ROOM, 2, 1, encodeFrame(early)), ts: 'not-a-time' };
+    refusedThenValid(d, record, 'frame timestamp not-a-time did not parse; not applied');
+  });
+});
+
 describe('(e) known decoder gaps', () => {
   const d = newDeal();
   const records = [

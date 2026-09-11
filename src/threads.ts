@@ -1,7 +1,11 @@
 import {
+  TCLK_TERMINAL_STATUSES,
+  applyFrame,
   contractId,
+  openContract,
   type AcceptCore,
   type AcceptFrame,
+  type ContractState,
   type OfferFrame,
 } from '@flop-labs/tclk';
 import type { FrameRecord } from './frames.js';
@@ -24,7 +28,8 @@ import type { FrameRecord } from './frames.js';
  *
  * The accept's `contract` field is written by its sender. So a contract id is
  * taken only from an accept it can be recomputed for. See
- * `recomputedContractId`.
+ * `recomputedContractId`. A thread's own contract id comes from the accept the
+ * state machine takes. See `acceptTaken`.
  */
 
 /**
@@ -53,8 +58,13 @@ export interface ContractThread {
   /** Present when the offer itself is in the scanned window. */
   readonly offer: FrameRecord | null;
   /**
-   * The contract id of the first accept here whose id recomputes from this
-   * offer. Null when no accept here does, including when the offer is absent.
+   * The accept the state machine takes for this offer. Null when it takes
+   * none, including when the offer is absent. See `acceptTaken`.
+   */
+  readonly accept: FrameRecord | null;
+  /**
+   * The contract id of `accept`. The machine takes an accept only when its id
+   * recomputes, so this is the recomputed id. Null when `accept` is null.
    */
   readonly contractId: string | null;
   /** Every frame attributed to this thread, in room order. */
@@ -73,6 +83,45 @@ export interface ThreadIndex {
    * accept here recomputes to lands here too.
    */
   readonly unattributed: readonly FrameRecord[];
+}
+
+/**
+ * The accept the state machine takes for a thread, or null.
+ *
+ * Frames are applied the way the fold in audit.ts applies them, from the state
+ * `openContract` opens, in room order, skipping a frame whose time did not
+ * parse. So this is the accept that fold accepts, and a thread's contract id
+ * and the board's status for it come from the same decision. When the machine
+ * refuses an accept, the offerer's own for example, the next one gets its turn.
+ *
+ * An accept whose own fields do not recompute to its `contract` is skipped
+ * before the machine sees it. The machine would refuse it as well. The search
+ * ends at the first accept the machine takes, or when the contract ends
+ * first, as a cancel from the offerer before any accept ends it.
+ */
+function acceptTaken(
+  offer: FrameRecord,
+  frames: readonly FrameRecord[],
+  recomputes: ReadonlySet<FrameRecord>,
+): FrameRecord | null {
+  if (offer.frame.type !== 'offer') return null;
+  let state: ContractState;
+  try {
+    state = openContract(offer.frame);
+  } catch {
+    return null;
+  }
+  for (const record of frames) {
+    if (record.frame.type === 'offer') continue;
+    if (!Number.isFinite(record.tsMs)) continue;
+    if (record.frame.type === 'accept' && !recomputes.has(record)) continue;
+    const step = applyFrame(state, record.frame, record.tsMs);
+    if (!step.ok) continue;
+    if (record.frame.type === 'accept') return record;
+    state = step.state;
+    if (TCLK_TERMINAL_STATUSES.has(state.status)) return null;
+  }
+  return null;
 }
 
 function frameContractId(record: FrameRecord): string | null {
@@ -144,14 +193,12 @@ export function buildThreads(frames: readonly FrameRecord[]): ThreadIndex {
   const threads: ContractThread[] = [];
   for (const [key, list] of grouped) {
     const offer = offers.get(key) ?? null;
-    // An accept counts only if its own fields hash to its `contract`. Another
-    // accept can carry a valid id it did not earn.
-    const accept = list.find((r) => recomputes.has(r));
+    const accept = offer === null ? null : acceptTaken(offer, list, recomputes);
     threads.push({
       key,
       offer,
-      contractId:
-        accept !== undefined && accept.frame.type === 'accept' ? accept.frame.contract : null,
+      accept,
+      contractId: accept !== null && accept.frame.type === 'accept' ? accept.frame.contract : null,
       frames: list,
       firstSeq: list.reduce((lowest, r) => (r.seq < lowest ? r.seq : lowest), list[0]!.seq),
     });
