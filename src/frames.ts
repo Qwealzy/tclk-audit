@@ -247,7 +247,9 @@ export function scanRecords(
 
     // The sender is room data as well. The live service only accepts a did:key
     // or a plain name, and neither changes here. This reader does not rely on
-    // the service for that, so anything else is encoded like a reason.
+    // the service for that, so the sender goes through sanitizeReason. That
+    // changes only characters that could act on an output surface. A printable
+    // sender comes through as it is. It is not rebuilt or hashed.
     const from = sanitizeReason(String(record.from));
 
     const frame = tryDecodeFrame(record.text);
@@ -312,9 +314,10 @@ function exactNonce(nonce: string | number | undefined): string | null {
  * the reason. Calling both is the only way to get a null result and an
  * explanation, and the explanation is the whole value of a rejection record.
  *
- * Every path out goes through `rebuildRefusal` and then `sanitizeReason`, so
- * no caller ever holds the raw message. The known-gap check reads the raw
- * message, which is never returned.
+ * Every refusal goes through `rebuildRefusal` and then `sanitizeReason`, so no
+ * caller ever holds the raw message. The one other path returns this module's
+ * own constant, for a decoder that disagreed with itself. The known-gap check
+ * reads the raw message, which is never returned.
  */
 function rejectionReason(text: string): { reason: string; gap: DecoderGap | undefined } {
   let raw: string;
@@ -398,9 +401,12 @@ const PREFIXED_REFUSALS: readonly string[] = [
 /**
  * Rebuilds a decoder refusal so that no text a stranger chose survives in it.
  *
- * STATED in 0.1.0's dist/frames.js (line 31): every refusal is thrown as
- * `new Error("tclk: " + msg)`, and the decoder gives no other form. So the
- * refusal is matched against every template the decode path can produce
+ * STATED in 0.1.0's dist/frames.js (line 31): every refusal the decoder
+ * writes is thrown as `new Error("tclk: " + msg)`, with no structured form. A
+ * JavaScript error it does not catch has another form. A TypeError from a type
+ * that cannot become a string is one, and a stack overflow from deep nesting is
+ * another. Those match no template and are hidden whole. So the refusal is
+ * matched against every template the decode path can produce
  * (dist/frames.js lines 36 to 315), and a new message is built from this
  * module's own copy of the fixed text.
  *   - A refusal with no stranger's part is kept, but only when it equals one

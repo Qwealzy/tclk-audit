@@ -24,11 +24,13 @@
 >   message from the fixed text. Each part a stranger chose appears only as `<N bytes, sha256:HEX>`,
 >   however harmless it looks, and a refusal in no known form is hidden whole. This drops an earlier
 >   rule, that the decoder's own words are never reworded. The findings file, the CI log, the model
->   prompt and room messages all carry the rebuilt text. Two strings a stranger chose can still reach
->   a finding's detail line, and from there the model prompt or a room message. One is a rejected
->   frame's sender, a did:key or a name the live service limits to lowercase letters, digits, `_`
->   and `-`. The other is a rail name the state machine repeats in "rail X was not offered". The
->   advice guard checks neither.
+>   prompt and room messages all carry the rebuilt text. Three strings a stranger chose can still
+>   reach a finding. A rejected frame's sender, a did:key or a name the live service limits to
+>   lowercase letters, digits, `_` and `-`, can reach a detail line. So can a rail name the state
+>   machine repeats in "rail X was not offered". From a detail line, either can reach the model prompt
+>   or a room message. The third is the subject of a finding about an accept whose offer is missing.
+>   It is that accept's `ref`, which the decoder limits to `0x` and 64 hex digits, and it reaches the
+>   model prompt. The advice guard checks none of them.
 >
 > The tool cannot currently produce a findings file at all. On 2026-09-11, 64.6% of live tclk lines
 > failed the decoder, far above the 5% rejection ceiling. Most of those were accept frames missing
