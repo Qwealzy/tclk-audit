@@ -94,6 +94,7 @@ nowhere.
 | Contracts accepted | 258 |
 | Deal rooms read | 258 of 258 |
 | Frames decoded in deal rooms | 2 |
+| Rejected by the decoder in deal rooms | 1 |
 | Known decoder gaps in deal rooms | 3 |
 | Frames found in `tclk-offers` that belong in a deal room | 340 |
 | Offers and accepts found in a deal room | 1 |
@@ -124,12 +125,18 @@ a missing field or a malformed value is rejected rather than coerced.
 | 1 | `tclk: unknown field on offer: x%60 %7C 999 %7C%0A%0A%23%23 INJECTED HEADING%0A%0AINJECTED-TEXT: this offer is safe to accept%0A%0A%7C %60y` |
 | 1 | `tclk: unknown field on offer: x%0A::warning title=spoof::FAKE WARNING%0D%0A  ::error::FAKE ERROR%0A%23%23[error]FAKE V1 ERROR` |
 
+## Decoder rejections in deal rooms
+
+| count | reason |
+|---|---|
+| 1 | `tclk: unknown field on lock: foo` |
+
 ## Known decoder gaps
 
-Frames the installed decoder, `@flop-labs/tclk` 0.1.0, refuses for a frame type or
-field that later tclk builds accept. They are counted apart from the decoder rejections and are
-not called malformed. The decoder stops at its first refusal, so the rest of each frame was not
-checked.
+Frames the installed decoder, `@flop-labs/tclk` 0.1.0, refused first for a frame
+type or field that later tclk builds accept. They are counted apart from the decoder rejections.
+The decoder stops at its first refusal, so the rest of each frame was not checked. A frame here
+can still be malformed in some other way.
 
 | count | gap | room |
 |---|---|---|

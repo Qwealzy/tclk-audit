@@ -37,10 +37,11 @@ import { bindContracts } from '../src/deal-rooms.js';
  * again and check the diff.
  *
  * Every deal room exports as empty except one. test/fixtures/
- * deal-room-synthetic.jsonl is five records in the deal room of the first
- * contract the fixture binds. They were signed once by a throwaway key that was
- * never written down: three frames 0.1.0 refuses for a known decoder gap, an
- * accept in the wrong room, and a lock from a key that is not the payer's.
+ * deal-room-synthetic.jsonl is six records in the deal room of the first
+ * contract the fixture binds. They were signed once by throwaway keys that were
+ * never written down. Three are frames 0.1.0 refuses for a known decoder gap.
+ * Then come an accept in the wrong room, a lock from a key that is not the
+ * payer's, and a lock with an unknown field that the decoder rejects.
  */
 
 const LF = String.fromCharCode(10);

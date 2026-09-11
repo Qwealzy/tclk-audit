@@ -246,6 +246,11 @@ const verificationCounts = new Map(tally(scan.frames, (f) => f.verification));
 const verificationCount = (kind) => verificationCounts.get(kind) ?? 0;
 
 const wrongRoomOnBoard = routed.wrongRoom.filter((w) => w.room === ROOM).length;
+const dealRejections = tally(
+  dealScans.flatMap((s) => s.rejections),
+  (r) => r.reason,
+);
+const dealRejectionCount = dealScans.reduce((n, s) => n + s.rejections.length, 0);
 const knownGaps = tally(
   [
     ...scan.knownGaps.map((g) => ({ gap: g.gap, where: `\`${ROOM}\`` })),
@@ -350,6 +355,7 @@ const lines = [
   `| Contracts accepted | ${bindings.length} |`,
   `| Deal rooms read | ${reads.scans.size} of ${dealRooms.length} |`,
   `| Frames decoded in deal rooms | ${dealScans.reduce((n, s) => n + s.frames.length, 0)} |`,
+  `| Rejected by the decoder in deal rooms | ${dealRejectionCount} |`,
   `| Known decoder gaps in deal rooms | ${dealScans.reduce((n, s) => n + s.knownGaps.length, 0)} |`,
   `| Frames found in \`${ROOM}\` that belong in a deal room | ${wrongRoomOnBoard} |`,
   `| Offers and accepts found in a deal room | ${routed.wrongRoom.length - wrongRoomOnBoard} |`,
@@ -399,14 +405,25 @@ if (rejections.length > 0) {
   );
 }
 
+if (dealRejections.length > 0) {
+  lines.push(
+    '## Decoder rejections in deal rooms',
+    '',
+    '| count | reason |',
+    '|---|---|',
+    ...dealRejections.map(([reason, count]) => `| ${count} | \`${reason}\` |`),
+    '',
+  );
+}
+
 if (knownGaps.length > 0) {
   lines.push(
     '## Known decoder gaps',
     '',
-    `Frames the installed decoder, \`@flop-labs/tclk\` ${installedDecoderVersion()}, refuses for a frame type or`,
-    'field that later tclk builds accept. They are counted apart from the decoder rejections and are',
-    'not called malformed. The decoder stops at its first refusal, so the rest of each frame was not',
-    'checked.',
+    `Frames the installed decoder, \`@flop-labs/tclk\` ${installedDecoderVersion()}, refused first for a frame`,
+    'type or field that later tclk builds accept. They are counted apart from the decoder rejections.',
+    'The decoder stops at its first refusal, so the rest of each frame was not checked. A frame here',
+    'can still be malformed in some other way.',
     '',
     '| count | gap | room |',
     '|---|---|---|',

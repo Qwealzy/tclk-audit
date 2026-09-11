@@ -264,6 +264,23 @@ describe('(d) an accept whose contract field is not the recomputed id', () => {
     expect(r.bindings[0]?.room).not.toBe(dealRoom(bad.contract));
   });
 
+  it('never takes a thread contract id from an accept that does not recompute', () => {
+    // An accept on offer B that carries A's real contract id. The id is valid
+    // for A and wrong for B, so B's thread names no contract.
+    const a = newDeal();
+    const b = newDeal();
+    const borrowed: AcceptFrame = { ...b.accept, contract: a.contract };
+    const board = [
+      ...handshake(a),
+      post(b.payer, OFFER_ROOM, 3, 2, encodeFrame(b.offer)),
+      post(b.payee, OFFER_ROOM, 4, 3, encodeFrame(borrowed)),
+    ];
+    const index = buildThreads(scanRecords(board, { room: OFFER_ROOM }).frames);
+    const byKey = new Map(index.threads.map((t) => [t.key, t.contractId]));
+    expect(byKey.get(a.offer.id)).toBe(a.contract);
+    expect(byKey.get(b.offer.id)).toBeNull();
+  });
+
   it('uses a later frame contract field only as a consistency check', () => {
     // A lock in the right deal room that names another contract. The room
     // decides the thread; the state machine refuses the mismatched field.

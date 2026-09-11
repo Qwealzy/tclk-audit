@@ -52,7 +52,10 @@ export interface ContractThread {
   readonly key: string;
   /** Present when the offer itself is in the scanned window. */
   readonly offer: FrameRecord | null;
-  /** The contract id, once an accept has bound it. */
+  /**
+   * The contract id of the first accept here whose id recomputes from this
+   * offer. Null when no accept here does, including when the offer is absent.
+   */
   readonly contractId: string | null;
   /** Every frame attributed to this thread, in room order. */
   readonly frames: readonly FrameRecord[];
@@ -138,7 +141,9 @@ export function buildThreads(frames: readonly FrameRecord[]): ThreadIndex {
   const threads: ContractThread[] = [];
   for (const [key, list] of grouped) {
     const offer = offers.get(key) ?? null;
-    const accept = list.find((r) => r.frame.type === 'accept');
+    const accept = list.find(
+      (r) => r.frame.type === 'accept' && contractToOffer.get(r.frame.contract) === key,
+    );
     threads.push({
       key,
       offer,

@@ -138,7 +138,8 @@ export interface ScanResult {
   /**
    * Lines the decoder refused for a known decoder gap. Kept apart from
    * `rejections`, so a frame that only a newer decoder reads is never reported
-   * as malformed, and never goes uncounted either.
+   * as malformed, and never goes uncounted either. A line here can still be
+   * malformed in some other way. See `KNOWN_DECODER_GAPS`.
    */
   readonly knownGaps: readonly KnownDecoderGap[];
   /** Messages in the room that were not tclk lines at all. Not an error. */
