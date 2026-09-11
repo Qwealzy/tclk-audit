@@ -3,9 +3,9 @@
 > [!CAUTION]
 > **Known broken and under repair. Do not rely on this tool or its findings.**
 >
-> Two open defects affect everything below. A third, listed first, is fixed. Banner added 2026-09-11
-> and revised the same day, once the tool read deal rooms, checked signatures and chained refusals
-> per contract.
+> One open defect affects everything below, the second listed. The other two are fixed, each with a
+> limit noted. Banner added 2026-09-11 and revised the same day, once the tool read deal rooms,
+> checked signatures, chained refusals per contract and rebuilt decoder refusals.
 >
 > - **Fixed on 2026-09-11 (9f367e8, e458750): later refusals are no longer all chained to the
 >   first.** Until then, once one transition was refused, the audit counted every later refusal in
@@ -17,14 +17,18 @@
 >   key that signed it, and counts the results. The tclk spec says only a verified frame is a
 >   commitment (SPEC.md, section 2). The tool does not act on the check yet. An unsigned record, or
 >   one whose signature fails, still moves a contract the same as a valid one.
-> - **A crafted field name still puts a stranger's words into findings.** The decoder repeats an
->   unknown field name word for word in its error message, and whoever posted the frame chose that
->   name. The message is percent-encoded where it is produced, so it cannot add a line, end a code
->   span or table cell, or run as a workflow command. The words themselves still get through. They
->   sit inside a code span in the findings file's decoder rejection table, inside the error message
->   the CI log shows when the rejection ceiling stops a run, and in the prompt of the optional model
->   call. They also reach a room message when findings are published at notice level. The advice
->   guard never checks any of them.
+> - **Fixed on 2026-09-11 (8f7341b): a stranger's words no longer pass through a decoder refusal.**
+>   The decoder repeats text a stranger chose in its refusals, such as an unknown field name, a
+>   malformed value or an unknown frame type. This tool no longer passes that message on. It
+>   matches the refusal against every template the 0.1.0 decoder can produce and builds its own
+>   message from the fixed text. Each part a stranger chose appears only as `<N bytes, sha256:HEX>`,
+>   however harmless it looks, and a refusal in no known form is hidden whole. This drops an earlier
+>   rule, that the decoder's own words are never reworded. The findings file, the CI log, the model
+>   prompt and room messages all carry the rebuilt text. Two strings a stranger chose can still reach
+>   a finding's detail line, and from there the model prompt or a room message. One is a rejected
+>   frame's sender, a did:key or a name the live service limits to lowercase letters, digits, `_`
+>   and `-`. The other is a rail name the state machine repeats in "rail X was not offered". The
+>   advice guard checks neither.
 >
 > The tool cannot currently produce a findings file at all. On 2026-09-11, 64.6% of live tclk lines
 > failed the decoder, far above the 5% rejection ceiling. Most of those were accept frames missing
