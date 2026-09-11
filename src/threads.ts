@@ -89,6 +89,8 @@ export function buildThreads(frames: readonly FrameRecord[]): ThreadIndex {
 
   const offers = new Map<string, FrameRecord>();
   const contractToOffer = new Map<string, string>();
+  /** Accepts whose own fields hash to their `contract` field. */
+  const recomputes = new Set<FrameRecord>();
 
   for (const record of ordered) {
     if (record.frame.type === 'offer') {
@@ -106,6 +108,7 @@ export function buildThreads(frames: readonly FrameRecord[]): ThreadIndex {
     const offer = offers.get(record.frame.ref);
     if (offer === undefined || offer.frame.type !== 'offer') continue;
     if (recomputedContractId(offer.frame, record.frame) !== record.frame.contract) continue;
+    recomputes.add(record);
     // First accept binds the contract. A second accept on the same offer is
     // a real event the state machine will reject, and it must not be allowed
     // to re-point the mapping.
@@ -141,9 +144,9 @@ export function buildThreads(frames: readonly FrameRecord[]): ThreadIndex {
   const threads: ContractThread[] = [];
   for (const [key, list] of grouped) {
     const offer = offers.get(key) ?? null;
-    const accept = list.find(
-      (r) => r.frame.type === 'accept' && contractToOffer.get(r.frame.contract) === key,
-    );
+    // An accept counts only if its own fields hash to its `contract`. Another
+    // accept can carry a valid id it did not earn.
+    const accept = list.find((r) => recomputes.has(r));
     threads.push({
       key,
       offer,

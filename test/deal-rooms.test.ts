@@ -281,6 +281,24 @@ describe('(d) an accept whose contract field is not the recomputed id', () => {
     expect(byKey.get(b.offer.id)).toBeNull();
   });
 
+  it('never takes it from an accept that carries a later accept real id', () => {
+    // Three accepts on one offer. The first carries the id of the third,
+    // which is valid for the third's fields and not for its own.
+    const d = newDeal();
+    const later = makeAccept(d.offer, { from: d.payee.did, statement: d.accept.statement });
+    const early = makeAccept(d.offer, { from: d.payee.did, statement: d.accept.statement });
+    const borrowed: AcceptFrame = { ...early, contract: later.contract };
+    const board = [
+      post(d.payer, OFFER_ROOM, 1, 0, encodeFrame(d.offer)),
+      post(d.payee, OFFER_ROOM, 2, 1, encodeFrame(borrowed)),
+      post(d.payee, OFFER_ROOM, 3, 2, encodeFrame(d.accept)),
+      post(d.payee, OFFER_ROOM, 4, 3, encodeFrame(later)),
+    ];
+    const frames = scanRecords(board, { room: OFFER_ROOM }).frames;
+    expect(buildThreads(frames).threads.map((t) => t.contractId)).toEqual([d.contract]);
+    expect(bindContracts(frames).bindings.map((b) => b.contract)).toEqual([d.contract]);
+  });
+
   it('uses a later frame contract field only as a consistency check', () => {
     // A lock in the right deal room that names another contract. The room
     // decides the thread; the state machine refuses the mismatched field.
