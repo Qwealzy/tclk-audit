@@ -26,10 +26,11 @@
  *
  * WHAT ONE RUN COVERS
  *
- * The ring holds roughly 10 MiB, which at current traffic is about two hours.
- * A once-daily run samples roughly a tenth of a day. The output states its own
- * window in seq and hours, so the accumulated history reads as a series of
- * samples rather than a continuous record.
+ * The ring holds roughly 10 MiB. How many hours that covers depends on traffic.
+ * The two measured windows were 1.6 hours on 2026-09-05 and 1.2 hours on
+ * 2026-09-06, so a once-daily run samples about 5% to 7% of a day. The output
+ * states its own window in seq and hours, so the accumulated history reads as a
+ * series of samples rather than a continuous record.
  */
 
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
