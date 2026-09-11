@@ -1,4 +1,5 @@
 import { isTclkLine, tryDecodeFrame, decodeFrame, type TclkFrame } from '@flop-labs/tclk';
+import { parseRoomPage, verifyStoredMessage } from 'technocore-client';
 
 /**
  * Reading tclk frames out of Technocore room messages.
@@ -55,7 +56,40 @@ export interface FrameRecord {
    * silently trusting either.
    */
   readonly signed: boolean;
+  /**
+   * What checking the record's signature and sender found.
+   *
+   * STATED [SPEC.md section 2, tclk 0.1.0]: "`from` inside a frame is the
+   * sender's `did:key`; it MUST match the transport-verified `from` of the
+   * record that carried it. An unsigned frame is data, not a commitment".
+   * Only `verified` is a commitment. Every other value is data.
+   *
+   * Nothing in this package acts on it yet. The audit still folds every
+   * decoded frame, whatever this says. How to use it is a separate decision.
+   */
+  readonly verification: FrameVerification;
 }
+
+/**
+ * The outcome of checking one record against SPEC.md section 2.
+ *
+ *   - `verified` means the signature verifies for the record's room, nonce and
+ *     text, and the frame's `from` is the key that signed it.
+ *   - `from-mismatch` means the signature verifies, and the frame's `from`
+ *     names a different key.
+ *   - `bad-signature` means the record carries a signature that does not
+ *     verify.
+ *   - `unsigned` means the record carries no signature.
+ *   - `unverifiable` means the record carries a signature that cannot be
+ *     checked here. The room was not given, or the nonce is missing or has
+ *     already lost digits.
+ */
+export type FrameVerification =
+  | 'verified'
+  | 'from-mismatch'
+  | 'bad-signature'
+  | 'unsigned'
+  | 'unverifiable';
 
 /** A line that looked like a frame and was refused by the normative decoder. */
 export interface FrameRejection {
@@ -85,6 +119,63 @@ export interface RoomRecord {
   readonly from: string;
   readonly text: string;
   readonly sig?: string;
+  /**
+   * The signing nonce, as digits. It can run to 19 digits, past 2^53, so a
+   * number here has often lost digits already. `parseExportLine` keeps it as a
+   * string. A number is used only when it is a safe integer.
+   */
+  readonly nonce?: string | number;
+}
+
+export interface ScanOptions {
+  /**
+   * The room the records were read from. A signature covers
+   * `<room>|<nonce>|<text>`, so without the room no signature can be checked,
+   * and every signed frame comes back `unverifiable`.
+   */
+  readonly room?: string;
+}
+
+/**
+ * Reads one line of a room's `/export` into a record.
+ *
+ * STATED [EXPORT], as technocore-client quotes it: "a stored nonce may be up to
+ * 19 digits, which is past 2^53". `JSON.parse` rounds such a number, and a
+ * rounded nonce fails a good signature. So the record is read through
+ * technocore-client's `parseRoomPage`, which quotes `seq` and `nonce` digits
+ * before it parses. The plain parse below only checks that the line is an
+ * object with a string `text`, as the callers did before. A torn or malformed
+ * line returns null.
+ */
+export function parseExportLine(line: string): RoomRecord | null {
+  let plain: unknown;
+  try {
+    plain = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof plain !== 'object' || plain === null) return null;
+  if (typeof (plain as { text?: unknown }).text !== 'string') return null;
+
+  let message;
+  try {
+    message = parseRoomPage(`{"messages":[${line}]}`).messages[0];
+  } catch {
+    return null;
+  }
+  if (message === undefined) return null;
+
+  const record: {
+    seq: bigint;
+    ts: string;
+    from: string;
+    text: string;
+    sig?: string;
+    nonce?: string;
+  } = { seq: message.seq, ts: message.ts, from: message.from, text: message.text };
+  if (message.sig !== undefined) record.sig = message.sig;
+  if (message.nonce !== undefined) record.nonce = message.nonce;
+  return record;
 }
 
 /**
@@ -102,7 +193,10 @@ export function parseServerTimestamp(ts: string): number {
   return Date.parse(ts);
 }
 
-export function scanRecords(records: Iterable<RoomRecord>): ScanResult {
+export function scanRecords(
+  records: Iterable<RoomRecord>,
+  options: ScanOptions = {},
+): ScanResult {
   const frames: FrameRecord[] = [];
   const rejections: FrameRejection[] = [];
   let nonFrameCount = 0;
@@ -138,10 +232,45 @@ export function scanRecords(records: Iterable<RoomRecord>): ScanResult {
       ts: record.ts,
       from,
       signed: typeof record.sig === 'string',
+      verification: verificationOf(record, frame, options.room),
     });
   }
 
   return { frames, rejections, nonFrameCount };
+}
+
+/**
+ * Checks one record against SPEC.md section 2 with technocore-client's
+ * `verifyStoredMessage`. It compares the frame's `from` with the raw transport
+ * `from`, before `sanitizeReason`, because that is the key the signature was
+ * checked against.
+ */
+function verificationOf(
+  record: RoomRecord,
+  frame: TclkFrame,
+  room: string | undefined,
+): FrameVerification {
+  if (typeof record.sig !== 'string') return 'unsigned';
+  const nonce = exactNonce(record.nonce);
+  if (room === undefined || nonce === null) return 'unverifiable';
+  const signed = verifyStoredMessage({
+    room,
+    nonce,
+    text: record.text,
+    did: String(record.from),
+    sig: record.sig,
+  });
+  if (!signed) return 'bad-signature';
+  return frame.from === record.from ? 'verified' : 'from-mismatch';
+}
+
+/** The nonce as exact digits, or null when it is missing or has lost digits. */
+function exactNonce(nonce: string | number | undefined): string | null {
+  if (typeof nonce === 'string') return nonce;
+  if (typeof nonce === 'number' && Number.isSafeInteger(nonce) && nonce >= 0) {
+    return String(nonce);
+  }
+  return null;
 }
 
 /**

@@ -1,5 +1,11 @@
 import { RoomCursor, type Transport, type StoredMessage } from 'technocore-client';
-import { scanRecords, type FrameRecord, type FrameRejection, type RoomRecord } from './frames.js';
+import {
+  scanRecords,
+  parseExportLine,
+  type FrameRecord,
+  type FrameRejection,
+  type RoomRecord,
+} from './frames.js';
 import { buildThreads } from './threads.js';
 import { audit, type AuditReport, type AuditOptions } from './audit.js';
 
@@ -56,8 +62,12 @@ function toRoomRecord(message: StoredMessage): RoomRecord {
     from: string;
     text: string;
     sig?: string;
+    nonce?: string;
   } = { seq: message.seq, ts: message.ts, from: message.from, text: message.text };
   if (message.sig !== undefined) record.sig = message.sig;
+  // technocore-client carries the nonce as digits. Keep them, since the
+  // signature covers them.
+  if (message.nonce !== undefined) record.nonce = message.nonce;
   return record;
 }
 
@@ -85,17 +95,14 @@ export class Follower {
     const records: RoomRecord[] = [];
     for (const line of reply.body.split('\n')) {
       if (line.length === 0) continue;
-      try {
-        // Untrusted content, and a torn final line is expected: STATED
-        // [EXPORT], the body is "cut back to the last complete line", but a
-        // defensive parse costs nothing.
-        const parsed = JSON.parse(line) as RoomRecord;
-        if (typeof parsed.text === 'string') records.push(parsed);
-      } catch {
-        continue;
-      }
+      // Untrusted content, and a torn final line is expected: STATED
+      // [EXPORT], the body is "cut back to the last complete line", but a
+      // defensive parse costs nothing. parseExportLine returns null for it,
+      // and keeps a 19-digit nonce exact.
+      const record = parseExportLine(line);
+      if (record !== null) records.push(record);
     }
-    const scan = scanRecords(records);
+    const scan = scanRecords(records, { room: this.#room });
     this.#frames = [...scan.frames];
     this.#rejections = [...scan.rejections];
     this.#trim();
@@ -118,7 +125,7 @@ export class Follower {
     }
 
     for await (const step of cursor.follow(followOptions)) {
-      const scan = scanRecords(step.messages.map(toRoomRecord));
+      const scan = scanRecords(step.messages.map(toRoomRecord), { room: this.#room });
       this.#frames.push(...scan.frames);
       this.#rejections.push(...scan.rejections);
       this.#trim();

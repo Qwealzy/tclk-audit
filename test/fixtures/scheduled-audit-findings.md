@@ -47,6 +47,20 @@ The room is a ring, so one run sees only what is retained, about 0.2 hours here,
 | Rejected by the decoder | 7 |
 | Lines that were not frames | 17 |
 
+## Signatures
+
+Each decoded frame is checked against SPEC.md section 2. It is a commitment only when its record's
+signature verifies and the frame's `from` is the key that signed it. Anything else is what the spec
+calls "data, not a commitment". This run reports the difference and does not act on it yet.
+
+| | |
+|---|---|
+| Signature verifies, `from` is the signer | 1178 |
+| Signature verifies, `from` names another key | 0 |
+| Signature does not verify | 0 |
+| Unsigned | 0 |
+| Could not be checked | 0 |
+
 ## Contracts
 
 | | |

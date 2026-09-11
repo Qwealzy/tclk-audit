@@ -1,5 +1,12 @@
-export { scanRecords, parseServerTimestamp } from './frames.js';
-export type { FrameRecord, FrameRejection, ScanResult, RoomRecord } from './frames.js';
+export { scanRecords, parseServerTimestamp, parseExportLine } from './frames.js';
+export type {
+  FrameRecord,
+  FrameRejection,
+  FrameVerification,
+  ScanOptions,
+  ScanResult,
+  RoomRecord,
+} from './frames.js';
 
 export { buildThreads } from './threads.js';
 export type { ContractThread, ThreadIndex } from './threads.js';

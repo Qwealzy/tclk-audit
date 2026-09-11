@@ -37,7 +37,7 @@ import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { Transport } from 'technocore-client';
-import { scanRecords } from '../dist/src/frames.js';
+import { scanRecords, parseExportLine } from '../dist/src/frames.js';
 import { buildThreads } from '../dist/src/threads.js';
 import { audit } from '../dist/src/audit.js';
 
@@ -137,19 +137,17 @@ try {
 const records = [];
 for (const line of body.split('\n')) {
   if (line.length === 0) continue;
-  try {
-    const parsed = JSON.parse(line);
-    if (typeof parsed.text === 'string') records.push(parsed);
-  } catch {
-    // STATED: the export body is cut back to the last complete line, so a torn
-    // tail is expected rather than a fault.
-  }
+  // STATED: the export body is cut back to the last complete line, so a torn
+  // tail is expected rather than a fault. parseExportLine returns null for it,
+  // and keeps a 19-digit nonce exact.
+  const record = parseExportLine(line);
+  if (record !== null) records.push(record);
 }
 
 if (body.trim().length === 0) fail(`export of /r/${ROOM} was empty`);
 if (records.length === 0) fail(`export of /r/${ROOM} contained no parseable records`);
 
-const scan = scanRecords(records);
+const scan = scanRecords(records, { room: ROOM });
 
 // Three ways a run can produce nothing useful. Each fails before anything is
 // written. A missing file for a day is a visible gap. A file full of zeroes is
@@ -211,6 +209,11 @@ const anomalies = tally(
 );
 const rejections = tally(scan.rejections, (r) => r.reason);
 
+// What checking each frame's signature and sender found. Reported only. The
+// audit above folded every decoded frame, whatever this says.
+const verificationCounts = new Map(tally(scan.frames, (f) => f.verification));
+const verificationCount = (kind) => verificationCounts.get(kind) ?? 0;
+
 const generatedAt = new Date().toISOString();
 // Sortable, and colon-free so the name is valid on every filesystem. A second
 // run on the same day adds a file instead of overwriting the first. This
@@ -259,6 +262,20 @@ const lines = [
   `| Decoded | ${scan.frames.length} |`,
   `| Rejected by the decoder | ${scan.rejections.length} |`,
   `| Lines that were not frames | ${scan.nonFrameCount} |`,
+  '',
+  '## Signatures',
+  '',
+  "Each decoded frame is checked against SPEC.md section 2. It is a commitment only when its record's",
+  "signature verifies and the frame's `from` is the key that signed it. Anything else is what the spec",
+  'calls "data, not a commitment". This run reports the difference and does not act on it yet.',
+  '',
+  '| | |',
+  '|---|---|',
+  '| Signature verifies, `from` is the signer | ' + verificationCount('verified') + ' |',
+  '| Signature verifies, `from` names another key | ' + verificationCount('from-mismatch') + ' |',
+  '| Signature does not verify | ' + verificationCount('bad-signature') + ' |',
+  '| Unsigned | ' + verificationCount('unsigned') + ' |',
+  '| Could not be checked | ' + verificationCount('unverifiable') + ' |',
   '',
   '## Contracts',
   '',

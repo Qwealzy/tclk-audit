@@ -5,6 +5,7 @@ import { decodeFrame, tryDecodeFrame } from '@flop-labs/tclk';
 import {
   scanRecords,
   parseServerTimestamp,
+  parseExportLine,
   sanitizeReason,
   type RoomRecord,
 } from '../src/frames.js';
@@ -23,7 +24,8 @@ function loadFixture(): RoomRecord[] {
   return readFileSync(FIXTURE, 'utf8')
     .split('\n')
     .filter((l) => l.length > 0)
-    .map((l) => JSON.parse(l) as RoomRecord);
+    .map((l) => parseExportLine(l))
+    .filter((r): r is RoomRecord => r !== null);
 }
 
 describe('the normative decoder handles live traffic', () => {

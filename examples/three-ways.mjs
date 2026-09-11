@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import {
   scanRecords,
+  parseExportLine,
   buildThreads,
   audit,
   renderFindings,
@@ -32,8 +33,9 @@ function runAudit() {
   const records = readFileSync(FIXTURE, 'utf8')
     .split('\n')
     .filter((l) => l.length > 0)
-    .map((l) => JSON.parse(l));
-  const scan = scanRecords(records);
+    .map((l) => parseExportLine(l))
+    .filter((r) => r !== null);
+  const scan = scanRecords(records, { room: 'tclk-offers' });
   return audit(buildThreads(scan.frames), scan.rejections, { nowMs: NOW });
 }
 
