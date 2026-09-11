@@ -40,6 +40,9 @@ export interface FrameRecord {
    *
    * STATED [IDENTITY]: unverified either way unless it is a did:key, and even
    * then it proves possession of a key and nothing more.
+   *
+   * Passed through `sanitizeReason`. A did:key or a plain name comes back
+   * unchanged.
    */
   readonly from: string;
   /**
@@ -58,8 +61,13 @@ export interface FrameRecord {
 export interface FrameRejection {
   readonly seq: bigint;
   readonly ts: string;
+  /** The sender, after `sanitizeReason`. See `FrameRecord.from`. */
   readonly from: string;
-  /** The decoder's own message. Never reworded. It names the exact field. */
+  /**
+   * The decoder's own message, after `sanitizeReason`. Never reworded, so it
+   * still names the exact field. Characters that could act on an output
+   * surface are percent-encoded.
+   */
   readonly reason: string;
 }
 
@@ -107,12 +115,17 @@ export function scanRecords(records: Iterable<RoomRecord>): ScanResult {
       continue;
     }
 
+    // The sender is room data as well. The live service only accepts a did:key
+    // or a plain name, and neither changes here. This reader does not rely on
+    // the service for that, so anything else is encoded like a reason.
+    const from = sanitizeReason(String(record.from));
+
     const frame = tryDecodeFrame(record.text);
     if (frame === null) {
       rejections.push({
         seq: BigInt(record.seq),
         ts: record.ts,
-        from: record.from,
+        from,
         reason: rejectionReason(record.text),
       });
       continue;
@@ -123,7 +136,7 @@ export function scanRecords(records: Iterable<RoomRecord>): ScanResult {
       seq: BigInt(record.seq),
       tsMs: parseServerTimestamp(record.ts),
       ts: record.ts,
-      from: record.from,
+      from,
       signed: typeof record.sig === 'string',
     });
   }
@@ -135,12 +148,62 @@ export function scanRecords(records: Iterable<RoomRecord>): ScanResult {
  * `tryDecodeFrame` returns null without saying why; `decodeFrame` throws with
  * the reason. Calling both is the only way to get a null result and an
  * explanation, and the explanation is the whole value of a rejection record.
+ *
+ * Every path out goes through `sanitizeReason`, so no caller ever holds the
+ * raw message.
  */
 function rejectionReason(text: string): string {
+  let raw: string;
   try {
     decodeFrame(text);
-    return 'decoder disagreed with itself between tryDecodeFrame and decodeFrame';
+    raw = 'decoder disagreed with itself between tryDecodeFrame and decodeFrame';
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    raw = error instanceof Error ? error.message : String(error);
   }
+  return sanitizeReason(raw);
+}
+
+const UTF8 = new TextEncoder();
+
+/** Printable ASCII that still has to be encoded. See `sanitizeReason`. */
+const ENCODED_ASCII: ReadonlySet<string> = new Set(['%', '`', '|', '#']);
+
+/**
+ * Makes a rejection reason inert on every surface that prints it.
+ *
+ * The reason is the decoder's error message, and the decoder repeats an
+ * unknown field name word for word. Whoever posted the frame chose that name.
+ * It can carry line breaks, Markdown, and lines the GitHub runner reads as
+ * workflow commands. This runs once, where the reason is produced, so the
+ * findings file, the CI log and any later output all read the same string.
+ * `scanRecords` passes each sender through it too.
+ *
+ * Percent-encoded as UTF-8:
+ *   - every character outside printable ASCII. This includes GitHub's
+ *     documented escaping for command data (`%` to %25, CR to %0D, LF to %0A)
+ *     and every control, format and separator character;
+ *   - `%` itself, so the encoding stays unambiguous;
+ *   - the backtick and `|`, which end a Markdown code span and a table cell;
+ *   - `#`, because the runner reads `##[command]` anywhere in a line.
+ *
+ * A `::` at the start, after any spaces, is encoded as well. The runner trims
+ * leading whitespace and reads a line that then starts with `::` as a command.
+ *
+ * Nothing else changes. A reason without these characters comes back as it
+ * was, and `decodeURIComponent` recovers any original exactly. A lone
+ * surrogate is the one exception. It has no UTF-8 form and becomes U+FFFD.
+ */
+export function sanitizeReason(reason: string): string {
+  let out = '';
+  for (const char of reason) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code >= 0x20 && code <= 0x7e && !ENCODED_ASCII.has(char)) {
+      out += char;
+      continue;
+    }
+    for (const byte of UTF8.encode(char)) {
+      out += '%' + byte.toString(16).toUpperCase().padStart(2, '0');
+    }
+  }
+  return out.replace(/^( *)::/, '$1%3A%3A');
 }

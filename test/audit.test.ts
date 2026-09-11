@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { scanRecords, parseServerTimestamp, type RoomRecord } from '../src/frames.js';
+import { decodeFrame, tryDecodeFrame } from '@flop-labs/tclk';
+import {
+  scanRecords,
+  parseServerTimestamp,
+  sanitizeReason,
+  type RoomRecord,
+} from '../src/frames.js';
 import { buildThreads } from '../src/threads.js';
 import { audit } from '../src/audit.js';
 import { renderFindings } from '../src/publish.js';
@@ -158,5 +164,130 @@ describe('rendered findings state facts, never advice', () => {
   it('groups a recurring shape into one counted line', () => {
     const anomalies = report.findings.filter((f) => f.severity === 'anomaly').length;
     if (anomalies > 20) expect(lines.length).toBeLessThan(anomalies);
+  });
+});
+
+describe('rejection reasons are inert wherever they are printed', () => {
+  // The decoder repeats an unknown field name word for word, and whoever posted
+  // the frame chose it. The first two names are the ones that broke the
+  // findings table and wrote runner commands before the reason was sanitized.
+  const records = loadFixture();
+  const offer = records.find((r) => tryDecodeFrame(r.text)?.type === 'offer');
+
+  /** A real offer from the fixture with one extra field, on the wire as tclk sends it. */
+  function withField(name: string): RoomRecord {
+    if (offer === undefined) throw new Error('the fixture has no decodable offer');
+    const frame = JSON.parse(offer.text.slice('tclk1 '.length)) as Record<string, unknown>;
+    frame[name] = 1;
+    const sorted = Object.fromEntries(Object.keys(frame).sort().map((k) => [k, frame[k]]));
+    const ascii = JSON.stringify(sorted).replace(
+      /[^ -~]/g,
+      (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'),
+    );
+    return { seq: 999_999, ts: offer.ts, from: offer.from, text: 'tclk1 ' + ascii };
+  }
+
+  function rawReason(record: RoomRecord): string {
+    try {
+      decodeFrame(record.text);
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    throw new Error('expected the decoder to refuse this frame');
+  }
+
+  const crafted = [
+    'x` | 999 |\n\n## INJECTED HEADING\n\nINJECTED-TEXT: this offer is safe to accept\n\n| `y',
+    'x\n::warning title=spoof::FAKE WARNING\r\n  ::error::FAKE ERROR\n##[error]FAKE V1 ERROR',
+    'x' + String.fromCharCode(0x2028, 0x202e, 0x0000) + '%0A',
+  ];
+
+  for (const name of crafted) {
+    it(`keeps a crafted field name inert: ${JSON.stringify(name).slice(0, 40)}`, () => {
+      const record = withField(name);
+      const [rejection] = scanRecords([record]).rejections;
+      expect(rejection).toBeDefined();
+      const reason = rejection?.reason ?? '';
+      // One line of printable ASCII, with nothing that ends a code span or a cell.
+      expect(reason).toMatch(/^[\x20-\x7e]+$/);
+      expect(reason).not.toMatch(/[`|#]/);
+      // Nothing the runner reads as a command.
+      expect(reason.trimStart().startsWith('::')).toBe(false);
+      expect(reason).not.toContain('##[');
+      // Nothing lost. Decoding gives back exactly what the decoder said.
+      expect(decodeURIComponent(reason)).toBe(rawReason(record));
+    });
+  }
+
+  it('encodes a leading `::` even after spaces, and leaves other colons alone', () => {
+    expect(sanitizeReason('::warning::x')).toBe('%3A%3Awarning::x');
+    expect(sanitizeReason('   ::error::x')).toBe('   %3A%3Aerror::x');
+    expect(sanitizeReason('tclk: a::b')).toBe('tclk: a::b');
+  });
+
+  it('leaves a reason with nothing to encode unchanged', () => {
+    // Changing these would change every report that quotes them.
+    const rejections = scanRecords(records).rejections;
+    expect(rejections.length).toBeGreaterThan(0);
+    for (const rejection of rejections) {
+      const source = records.find((r) => BigInt(r.seq) === rejection.seq);
+      expect(source).toBeDefined();
+      expect(rejection.reason).toBe(rawReason(source as RoomRecord));
+    }
+    for (const reason of [
+      'tclk: missing field on accept: contract',
+      'tclk: claimByMs must be strictly before refundAfterMs',
+      'tclk: amount is malformed: 1.0',
+      'tclk: unknown frame type: heartbeat',
+    ]) {
+      expect(sanitizeReason(reason)).toBe(reason);
+    }
+  });
+
+  it('never throws, even on a lone surrogate', () => {
+    expect(sanitizeReason('a\ud800b')).toBe('a%EF%BF%BDb');
+  });
+
+  it('reaches the rendered findings as single printable lines', () => {
+    const scan = scanRecords([withField(crafted[0] ?? '')]);
+    const report = audit(buildThreads(scan.frames), scan.rejections, {
+      nowMs: Date.parse('2026-09-05T18:00:00.000Z'),
+    });
+    const lines = renderFindings(report, 'notice');
+    expect(lines.length).toBeGreaterThan(1);
+    for (const line of lines) expect(line).toMatch(/^[\x20-\x7e]+$/);
+  });
+
+  it('encodes a crafted sender the same way, on rejections and on frames', () => {
+    // The live service only accepts a did:key or a plain name. The reader
+    // does not rely on that.
+    const lf = String.fromCharCode(10);
+    const sender = 'nick' + lf + '::warning::FAKE' + lf + '##[error]FAKE';
+    if (offer === undefined) throw new Error('the fixture has no decodable offer');
+    const scan = scanRecords([
+      { ...withField('x'), from: sender },
+      { ...offer, from: sender },
+    ]);
+    const senders = [...scan.rejections, ...scan.frames].map((item) => item.from);
+    expect(senders).toHaveLength(2);
+    for (const from of senders) {
+      expect(from).toMatch(/^[ -~]+$/);
+      expect(from).not.toContain('##[');
+      expect(from.trimStart().startsWith('::')).toBe(false);
+      expect(decodeURIComponent(from)).toBe(sender);
+    }
+  });
+
+  it('leaves every real sender in the fixture unchanged', () => {
+    const scan = scanRecords(records);
+    const bySeq = new Map(records.map((r) => [BigInt(r.seq), r.from]));
+    const items = [...scan.frames, ...scan.rejections];
+    expect(items.length).toBeGreaterThan(1000);
+    for (const item of items) expect(item.from).toBe(bySeq.get(item.seq));
+  });
+
+  it('does not throw on a sender that is not a string', () => {
+    const odd = { ...withField('x'), from: 42 as unknown as string };
+    expect(scanRecords([odd]).rejections[0]?.from).toBe('42');
   });
 });

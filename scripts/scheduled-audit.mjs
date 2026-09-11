@@ -77,9 +77,11 @@ const KNOWN_DEFECTS_BANNER = [
   '> - **It reads the wrong room.** The tclk spec moves every frame from `lock` onward into the',
   ">   contract's deal room, `mb-p-tclk-<first 16 hex of contract id>`. The tool reads only",
   '>   `tclk-offers`. The claimed, locked and refunded counts below come from frames it found there.',
-  '> - **A crafted field name can inject text into findings.** The decoder rejection table repeats',
-  ">   the decoder's error messages word for word. An error message can contain a field name chosen",
-  '>   by whoever posted the frame, and nothing filters it before it is written here.',
+  "> - **A crafted field name can put a stranger's words into findings.** The decoder rejection table",
+  ">   quotes the decoder's error messages, and an error message can contain a field name chosen by",
+  '>   whoever posted the frame. Each message is percent-encoded before it is written, so a crafted',
+  '>   name cannot add a line, end the code span or table cell, or run as a workflow command. Its',
+  '>   words still appear, and the advice guard never checks them.',
 ];
 
 function fail(message, error) {

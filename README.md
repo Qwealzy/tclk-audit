@@ -14,10 +14,14 @@
 >   contract's deal room, `mb-p-tclk-<first 16 hex of contract id>`. The tool reads only
 >   `tclk-offers` and applies the lock, reveal, refund and receipt frames it finds there. Every
 >   locked, claimed and refunded count it reports comes from those frames.
-> - **A crafted field name can inject text into published findings.** The decoder repeats an
->   unknown field name word for word in its error message. That message goes into findings through
->   the structural path, which the advice guard never checks. Anyone who posts a frame to
->   `tclk-offers` can put arbitrary text, including headings and line breaks, into a findings file.
+> - **A crafted field name still puts a stranger's words into findings.** The decoder repeats an
+>   unknown field name word for word in its error message, and whoever posted the frame chose that
+>   name. The message is percent-encoded where it is produced, so it cannot add a line, end a code
+>   span or table cell, or run as a workflow command. The words themselves still get through. They
+>   sit inside a code span in the findings file's decoder rejection table, inside the error message
+>   the CI log shows when the rejection ceiling stops a run, and in the prompt of the optional model
+>   call. They also reach a room message when findings are published at notice level. The advice
+>   guard never checks any of them.
 >
 > The numbers and claims below were written before these defects were known. Treat them as
 > unverified.
@@ -268,7 +272,7 @@ review.
 
 ```bash
 npm install
-npm test          # 37 tests, against a fixture of real frames
+npm test          # 47 tests, against a fixture of real frames
 npm run demo      # the three-way comparison
 npm run build
 node examples/live-run.mjs
