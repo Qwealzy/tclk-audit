@@ -413,4 +413,66 @@ describe('the scheduled run, offline', () => {
     expect(existsSync(run.outDir)).toBe(false);
     rmSync(broken, { recursive: true, force: true });
   }, 60_000);
+
+  it('keeps a crafted exception message out of the log, even one shaped like a stack', () => {
+    // A stack reads `Name: message` before its frames, and a message can run
+    // to several lines. One carrying a line that starts with `at` would put
+    // itself in the log if the whole stack were searched for a frame.
+    const broken = join(BUILD, '..', 'scheduled-audit-test-stacky');
+    rmSync(broken, { recursive: true, force: true });
+    cpSync(BUILD, broken, { recursive: true });
+    const framesPath = join(broken, 'dist', 'src', 'frames.js');
+    const crafted = '\\n    at ::error title=INJECTED::SECRET-ROOM-TEXT (/x.js:1:1)';
+    const patched = readFileSync(framesPath, 'utf8').replace(
+      'export function scanRecords(',
+      `export function scanRecords() {\n    throw new TypeError("tclk: unknown field on offer: ${crafted}");\n}\nexport function unusedScanRecords(`,
+    );
+    writeFileSync(framesPath, patched);
+
+    const run = runScheduledAudit('stacky', [...fixture], {}, broken);
+    expect(run.status).toBe(1);
+    expect(run.outcome).toBe('error');
+    const printed = run.stderr + run.stdout + run.summary;
+    expect(printed).toContain('unhandled TypeError');
+    for (const fragment of ['INJECTED', 'SECRET-ROOM-TEXT', 'unknown field on offer']) {
+      expect(printed, fragment).not.toContain(fragment);
+    }
+    // One line, and the runner reads no command out of it.
+    const commands = run.stderr.split(LF).filter((l) => l.startsWith('::'));
+    expect(commands).toHaveLength(1);
+    rmSync(broken, { recursive: true, force: true });
+  }, 60_000);
+
+  it('never prints a transport error message, which carries the server response', () => {
+    // technocore-client builds a transport error's message from the first line
+    // of the response body. A body opening with `::` would be a workflow
+    // command in this log, so only the error's class is printed.
+    const preload = join(scratch, 'hostile-fetch.mjs');
+    writeFileSync(
+      preload,
+      [
+        'globalThis.fetch = async () =>',
+        '  new Response("::error title=INJECTED::body text a stranger chose", { status: 503 });',
+      ].join(LF) + LF,
+    );
+    const outDir = join(scratch, 'hostile-out');
+    const outputPath = join(scratch, 'hostile-output.txt');
+    writeFileSync(outputPath, '');
+    const run = spawnSync(
+      process.execPath,
+      ['--import', pathToFileURL(preload).href, join(BUILD, 'scripts', 'scheduled-audit.mjs')],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, TCLK_ROOM: 'tclk-offers', TCLK_OUT_DIR: outDir, GITHUB_OUTPUT: outputPath },
+      },
+    );
+    expect(run.status).toBe(1);
+    expect(readFileSync(outputPath, 'utf8')).toContain('outcome=error');
+    expect(run.stderr).toContain('::error::scheduled-audit: could not export /r/tclk-offers');
+    for (const fragment of ['INJECTED', 'stranger chose']) {
+      expect(run.stderr, fragment).not.toContain(fragment);
+    }
+    expect(run.stderr.split(LF).filter((l) => l.startsWith('::'))).toHaveLength(1);
+    expect(existsSync(outDir)).toBe(false);
+  }, 60_000);
 });

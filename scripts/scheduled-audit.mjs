@@ -148,15 +148,28 @@ function installedDecoderVersion() {
  * An exception nobody caught writes no outcome at all. The job is red then
  * too, and the commit step, which runs only on `written`, stays out.
  */
+/**
+ * Neither of these throws. They write the runner's own files, and a failure
+ * there says nothing about the audit. One that threw inside `fail` would
+ * re-enter the handler that called it, and the run would die reporting the
+ * write instead of what went wrong.
+ */
 function setOutcome(outcome) {
-  const file = process.env['GITHUB_OUTPUT'];
-  if (file !== undefined && file !== '') appendFileSync(file, `outcome=${outcome}\n`, 'utf8');
+  appendLine(process.env['GITHUB_OUTPUT'], `outcome=${outcome}`);
 }
 
 /** A line in the job summary, when the runner gives one. */
 function summary(text) {
-  const file = process.env['GITHUB_STEP_SUMMARY'];
-  if (file !== undefined && file !== '') appendFileSync(file, `${text}\n`, 'utf8');
+  appendLine(process.env['GITHUB_STEP_SUMMARY'], text);
+}
+
+function appendLine(file, text) {
+  if (file === undefined || file === '') return;
+  try {
+    appendFileSync(file, `${text}\n`, 'utf8');
+  } catch {
+    // Nothing to do here, and nothing worth failing the run over.
+  }
 }
 
 /**
@@ -174,9 +187,15 @@ function stop(message) {
 function fail(message, error) {
   // The ::error:: prefix surfaces this in the Actions log and the job summary.
   // Without it the message sits in step output nobody opens.
-  console.error(`::error::scheduled-audit: ${message}`);
-  if (error !== undefined) console.error(String(error instanceof Error ? error.message : error));
-  summary(`**Failed.** ${message}`);
+  //
+  // Only the error's class is added, never its message. technocore-client
+  // builds a transport error's message from the first line of the server's
+  // response body, and that is remote text. Printed as it came, a body opening
+  // with `::` would be a workflow command in this log. src/deal-rooms.ts keeps
+  // the class name for the same reason.
+  const kind = error === undefined ? '' : ` (${error?.constructor?.name ?? typeof error})`;
+  console.error(`::error::scheduled-audit: ${message}${kind}`);
+  summary(`**Failed.** ${message}${kind}`);
   setOutcome('error');
   process.exit(1);
 }
@@ -191,13 +210,26 @@ function fail(message, error) {
  * goes to a public log.
  */
 function unexpected(error) {
-  const where = String(error?.stack ?? '')
-    .split('\n')
-    .find((line) => line.trim().startsWith('at '));
-  fail(
-    `unhandled ${error?.constructor?.name ?? typeof error}` +
-      (where === undefined ? '' : ` ${where.trim().replace(/^at /, 'at ')}`),
-  );
+  fail(`unhandled ${error?.constructor?.name ?? typeof error}${throwSite(error)}`);
+}
+
+/**
+ * Where an error was thrown, as one frame of its stack, or nothing.
+ *
+ * A stack starts with `Name: message`, and a message can run to several lines.
+ * So the message is cut off the front before a frame is looked for. Searching
+ * the whole stack would let a message carrying a line that starts with `at`
+ * put itself in this log. The frame is then kept to printable ASCII, with no
+ * leading `::`, since the runner reads such a line as a command.
+ */
+function throwSite(error) {
+  const stack = String(error?.stack ?? '');
+  const head = `${error?.name ?? ''}: ${error?.message ?? ''}`;
+  const frames = stack.startsWith(head) ? stack.slice(head.length) : stack;
+  const frame = frames.split('\n').find((line) => /^\s+at \S/.test(line));
+  if (frame === undefined) return '';
+  const printable = frame.trim().replace(/[^\x20-\x7e]/g, '?').slice(0, 120);
+  return printable.startsWith('::') ? '' : ` ${printable}`;
 }
 
 process.on('uncaughtException', unexpected);
@@ -616,7 +648,6 @@ console.log(
     `${boardSignatures.unverifiable + dealSignatures.unverifiable} unverifiable`,
 );
 console.log(`  read budget after run: ${JSON.stringify(transport.budget.read)}`);
-setOutcome('written');
 summary(
   `**Wrote \`${stamp}.md\`.** Window ${windowFirst}..${windowLast}, ${scan.frames.length} frames, ` +
     `${report.threadCount} threads.`,
@@ -630,3 +661,8 @@ if (badSignatures > 0) {
       'and were left out. A sudden rise more likely means a fault in this tool than many senders at once.',
   );
 }
+
+// Last, once the file is on disk and everything is printed. Anything that
+// throws before this line leaves the outcome unset, and the run ends red with
+// the commit step out, which is what a half-finished run should do.
+setOutcome('written');
