@@ -94,6 +94,7 @@ function runScheduledAudit(
   exportLines: readonly string[],
   rooms: Readonly<Record<string, string>> = {},
   build: string = BUILD,
+  extraEnv: Readonly<Record<string, string>> = {},
 ): Run {
   const exportPath = join(scratch, name + '.jsonl');
   const roomsPath = join(scratch, name + '-rooms.json');
@@ -126,6 +127,7 @@ function runScheduledAudit(
         TCLK_OUT_DIR: outDir,
         GITHUB_OUTPUT: outputPath,
         GITHUB_STEP_SUMMARY: summaryPath,
+        ...extraEnv,
       },
     },
   );
@@ -338,6 +340,112 @@ describe('the scheduled run, offline', () => {
     );
   }
 
+  /** One record the scanner counts, built from a fixture line. */
+  function rewrite(line: string, change: (record: Record<string, unknown>) => void): string {
+    const record = JSON.parse(line) as Record<string, unknown>;
+    change(record);
+    return JSON.stringify(record);
+  }
+
+  it('counts a frame the signature check left out as unverified', () => {
+    // One verified frame carried the old rate, because a frame left out by the
+    // signature check counted as a good line. A reader that lost every nonce,
+    // which is a fault in this tool, wrote a file of zeroes and went green.
+    const stripped = fixture.map((line, i) =>
+      i === 0 ? line : rewrite(line, (record) => delete record['nonce']),
+    );
+    const run = runScheduledAudit('unverifiable', stripped);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.outcome).toBe('ceiling-stop');
+    expect(existsSync(run.outDir)).toBe(false);
+    expect(run.stdout).toContain('left out by the signature check');
+  }, 60_000);
+
+  it('counts a line that is not a tclk line at all as unverified', () => {
+    // If the ecosystem moved off the `tclk1 ` prefix, every line would become a
+    // non-frame. A rate over decoded lines only reads 0% while the run writes a
+    // file with five frames in it.
+    const moved = fixture.map((line, i) =>
+      i < 5 ? line : rewrite(line, (record) => {
+        record['text'] = 'tclk2 ' + String(record['text']).slice('tclk1 '.length);
+      }),
+    );
+    const run = runScheduledAudit('prefix-moved', moved);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.outcome).toBe('ceiling-stop');
+    expect(existsSync(run.outDir)).toBe(false);
+    expect(run.stdout).toContain('not tclk lines');
+  }, 60_000);
+
+  it('does not count a known decoder gap against the ceiling', () => {
+    // A frame a later tclk build reads and 0.1.0 does not. It measures the
+    // distance between the installed decoder and the traffic, so it is counted
+    // on neither side. Under the old rate these 300 lines alone were 20% and
+    // closed the run down.
+    const heartbeats = Array.from({ length: 300 }, (_, n) =>
+      JSON.stringify({
+        seq: 700_000 + n,
+        ts: '2026-09-05T16:59:00.000000Z',
+        from: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+        text: 'tclk1 {"contract":"0x' + 'ab'.repeat(32) + '","from":"did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK","nonce":"0123456789abcdef","type":"heartbeat"}',
+      }),
+    );
+    const run = runScheduledAudit('known-gaps', [...fixture, ...heartbeats]);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.outcome).toBe('written');
+    expect(readdirSync(run.outDir)).toEqual([STAMP + '.md']);
+    const written = readFileSync(join(run.outDir, STAMP + '.md'), 'utf8');
+    expect(written).toContain('| Known decoder gaps | 300 |');
+  }, 60_000);
+
+  it('counts a line that never parsed as unverified', () => {
+    // A line the export carried that never became a record is not a verified
+    // frame either. Left out, a change in the export format would read as 0%.
+    const junk = Array.from({ length: 400 }, (_, n) => `{"seq":${600_000 + n},"not":"a record"`);
+    const run = runScheduledAudit('unparsed', [...fixture.slice(0, 100), ...junk]);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.outcome).toBe('ceiling-stop');
+    expect(run.stdout).toContain('400 lines that did not parse');
+    expect(existsSync(run.outDir)).toBe(false);
+  }, 60_000);
+
+  it('treats an empty ceiling setting as unset, not as a ceiling of nothing', () => {
+    // Number('') is 0, and ?? does not fall back for an empty string, so this
+    // would otherwise mean every run stops under a ceiling nobody set.
+    const run = runScheduledAudit('blank-ceiling', [...fixture], {}, BUILD, {
+      TCLK_MAX_REJECTION_RATE: '   ',
+    });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.outcome).toBe('written');
+    expect(readdirSync(run.outDir)).toEqual([STAMP + '.md']);
+  }, 60_000);
+
+  it('says so when the ceiling cannot fire', () => {
+    // 1 is inside the range and no rate exceeds it. Whoever set it gets to know
+    // the guard is off, rather than reading a green run as a healthy one.
+    const run = runScheduledAudit('ceiling-off', [...fixture, ...overTheCeiling()], {}, BUILD, {
+      TCLK_MAX_REJECTION_RATE: '1',
+    });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.outcome).toBe('written');
+    expect(run.stdout).toContain('::notice::scheduled-audit: the rejection ceiling is 100%, so it cannot stop this run.');
+  }, 60_000);
+
+  it('stops red when the ceiling itself is not a number', () => {
+    // A ceiling that does not parse is NaN, every comparison against it is
+    // false, and the guard would be off with nothing saying so.
+    const run = runScheduledAudit('bad-ceiling', [...fixture], {}, BUILD, {
+      TCLK_MAX_REJECTION_RATE: '::error title=INJECTED::abc',
+    });
+    expect(run.status).toBe(1);
+    expect(run.outcome).toBe('error');
+    expect(run.stderr).toContain('TCLK_MAX_REJECTION_RATE is set to something that is not a fraction');
+    // The value came from the environment, so it is not echoed.
+    expect(run.stderr).not.toContain('INJECTED');
+    expect(run.stderr.split(LF).filter((l) => l.startsWith('::'))).toHaveLength(1);
+    expect(existsSync(run.outDir)).toBe(false);
+  }, 60_000);
+
   it('stops at the rejection ceiling green, writes nothing, and prints one inert notice', () => {
     expect(crafted).toHaveLength(5);
     const run = runScheduledAudit('ceiling', [...fixture, ...overTheCeiling()]);
@@ -346,7 +454,7 @@ describe('the scheduled run, offline', () => {
     expect(run.status, run.stderr).toBe(0);
     expect(run.stderr).toBe('');
     expect(run.outcome).toBe('ceiling-stop');
-    expect(run.summary).toContain('**No findings file.** decode rejection rate');
+    expect(run.summary).toContain('**No findings file.** unverified rate');
     expect(existsSync(run.outDir)).toBe(false);
 
     // The runner splits on LF and on CR, and reads each line for commands.
@@ -356,16 +464,18 @@ describe('the scheduled run, offline', () => {
       .filter((line) => line.startsWith('::'));
     expect(printed).toHaveLength(1);
     const line = printed[0] ?? '';
-    expect(line.startsWith('::notice::scheduled-audit: decode rejection rate')).toBe(true);
-    // It states what was measured, the decoder included, and guesses no cause.
+    expect(line.startsWith('::notice::scheduled-audit: unverified rate')).toBe(true);
+    // It names every way a line failed to become a frame this run would apply,
+    // the decoder included, and guesses no cause.
     const installed = JSON.parse(
       readFileSync(at('node_modules', '@flop-labs', 'tclk', 'package.json'), 'utf8'),
     ) as { version: string };
-    expect(line).toContain(
-      'tclk lines in the export failed the installed decoder, @flop-labs/tclk ' +
-        installed.version +
-        ', so no findings file was written.',
-    );
+    expect(line).toContain('lines in the export are not a frame this run would apply:');
+    expect(line).toContain(`rejected by the installed decoder, @flop-labs/tclk ${installed.version},`);
+    expect(line).toContain('refused by the shape check');
+    expect(line).toContain('left out by the signature check');
+    expect(line).toContain('not tclk lines');
+    expect(line).toContain('known decoder gaps are counted on neither side');
     expect(line).not.toContain('moved');
     // Each crafted refusal is there, as fixed text with the stranger's part
     // shown only as its length and hash.

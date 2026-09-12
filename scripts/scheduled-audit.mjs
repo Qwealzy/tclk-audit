@@ -44,8 +44,8 @@
  *
  * Only a frame whose signature verifies, and whose `from` is the key that
  * signed it, is applied (src/frames.ts). Every other decoded frame is left out
- * and counted by kind under Signature policy. Those frames decoded, so they do
- * not count toward the decode rejection ceiling below.
+ * and counted by kind under Signature policy, and counts as unverified at the
+ * ceiling below.
  */
 
 import { appendFileSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
@@ -78,8 +78,47 @@ const OUT_DIR = process.env['TCLK_OUT_DIR'] ?? 'findings';
  *
  * A cron job that quietly writes empty or meaningless findings for months is
  * worse than one that stops, so this stops.
+ *
+ * The rate is measured over the whole export, not over decoded lines alone.
+ * See the ceiling below for what counts.
  */
-const REJECTION_RATE_CEILING = Number(process.env['TCLK_MAX_REJECTION_RATE'] ?? '0.05');
+// `Number('')` is 0, and `??` does not fall back for an empty string, so an
+// unset-but-present variable would silently mean a ceiling of nothing. An
+// empty or blank value is treated as absent.
+const CEILING_SETTING = (process.env['TCLK_MAX_REJECTION_RATE'] ?? '').trim();
+const REJECTION_RATE_CEILING = CEILING_SETTING === '' ? 0.05 : Number(CEILING_SETTING);
+
+/**
+ * A ceiling that does not parse would be `NaN`, and every comparison against
+ * `NaN` is false, so the guard would be off and nothing would say so. The run
+ * stops instead, and stops red.
+ *
+ * Falling back to the default was the other option. It keeps the job running,
+ * and that is the reason against it. The operator would see a green run under a
+ * ceiling they did not set, and the value they meant to set would never take
+ * effect. This way the run says once that the setting is wrong, and waits.
+ *
+ * The setting is never printed as it was given. It comes from the environment,
+ * and this line goes to a public log. The parsed number is printed, which is a
+ * finite fraction by the time anything reads it.
+ */
+if (!Number.isFinite(REJECTION_RATE_CEILING) || REJECTION_RATE_CEILING < 0 || REJECTION_RATE_CEILING > 1) {
+  fail('TCLK_MAX_REJECTION_RATE is set to something that is not a fraction between 0 and 1');
+}
+
+/** The ceiling as a percentage. A small one must not print as 0%. */
+const ceilingPercent = (() => {
+  const percent = REJECTION_RATE_CEILING * 100;
+  return Number.isInteger(percent) ? String(percent) : String(Number(percent.toPrecision(3)));
+})();
+
+if (REJECTION_RATE_CEILING >= 1) {
+  // A ceiling of 1 is inside the range and can never fire, since a rate is at
+  // most 1. Whoever set it gets to know that the guard is off.
+  console.log(
+    `::notice::scheduled-audit: the rejection ceiling is ${ceilingPercent}%, so it cannot stop this run.`,
+  );
+}
 
 /**
  * What was fixed in the tool that writes this file, and what each fix left
@@ -253,13 +292,15 @@ try {
 }
 
 const records = [];
+let unparsedLines = 0;
 for (const line of body.split('\n')) {
   if (line.length === 0) continue;
   // STATED: the export body is cut back to the last complete line, so a torn
   // tail is expected rather than a fault. parseExportLine returns null for it,
   // and keeps a 19-digit nonce exact.
   const record = parseExportLine(line);
-  if (record !== null) records.push(record);
+  if (record === null) unparsedLines += 1;
+  else records.push(record);
 }
 
 if (body.trim().length === 0) fail(`export of /r/${ROOM} was empty`);
@@ -296,24 +337,46 @@ if (scan.frames.length === 0) {
   );
 }
 
-// A known decoder gap is still a line the installed decoder could not read,
-// so it counts toward the ceiling the same as any other refusal. So does a
-// line the shape check refused. If the decoder and the shape check ever
-// disagree about most of the traffic, this run stops instead of hiding it. A
-// frame the signature check left out decoded and passed the shape check, so it
-// counts as a line here and not as a refusal.
-const refused = [...byDecoder(scan.rejections), ...byShapeCheck(scan.rejections), ...scan.knownGaps];
-const tclkLines = scan.frames.length + signatureRefused + refused.length;
-const rejectionRate = tclkLines === 0 ? 1 : refused.length / tclkLines;
+// The ceiling measures one thing: how much of the export this run could not
+// turn into a frame it would apply. STATED in src/frames.ts: scanRecords puts
+// every record it reads into exactly one of frames, rejections, knownGaps and
+// nonFrameCount, so the four sum to the export. A frame in `frames` decoded,
+// passed the shape check and verified. Everything else is unverified, and the
+// count needs no list of names to stay complete. A line the decoder refused, a
+// frame the shape check refused, a frame the signature check left out, and a
+// message that is not a tclk line at all all land in it the same way.
+//
+// That last one matters. If the ecosystem moved off the `tclk1 ` prefix, every
+// line would become a non-frame, and a rate over decoded lines only would read
+// 0% while the run wrote a file with nothing in it.
+//
+// INFERRED, and this package's own decision rather than anything the spec
+// says: a known decoder gap is not counted as unverified, and is left out of
+// both sides of the rate. It is a frame a later tclk build reads and this one
+// does not, so it measures the distance between the installed decoder and the
+// traffic, not a fault in either. Counting it would let a version gap alone
+// close the run down. It is reported on its own, as it has been since the gap
+// list existed.
+// A line the export carried that never became a record counts too. It is not a
+// verified frame either, and leaving it out would let a change in the export
+// format read as 0%. The torn last line STATED above is one of these, so a
+// healthy export carries at most one.
+const totalLines =
+  scan.frames.length + scan.rejections.length + scan.knownGaps.length + scan.nonFrameCount + unparsedLines;
+const judgedLines = totalLines - scan.knownGaps.length;
+const unverified = judgedLines - scan.frames.length;
+// Nothing to judge means nothing was verified either, so this stops. The check
+// above catches that first today. This side stays closed if it ever moves.
+const unverifiedRate = judgedLines === 0 ? 1 : unverified / judgedLines;
 
-if (rejectionRate > REJECTION_RATE_CEILING) {
-  // A rate this far above the floor means most tclk lines did not decode with
-  // the installed decoder. That has had more than one cause. The decoder can be
-  // older than the traffic, or the traffic can fail every version of the
-  // schema. The message states what was measured and leaves the cause to the
-  // reader.
+if (unverifiedRate > REJECTION_RATE_CEILING) {
+  // A rate this far above the floor means most of the room did not become a
+  // frame this run would apply. That has had more than one cause. The decoder
+  // can be older than the traffic, the traffic can fail every version of the
+  // schema, or the room can carry something other than frames. The message
+  // states what was measured and leaves the cause to the reader.
   const reasons = new Map();
-  for (const rejection of refused) {
+  for (const rejection of scan.rejections) {
     reasons.set(rejection.reason, (reasons.get(rejection.reason) ?? 0) + 1);
   }
   const top = [...reasons]
@@ -322,14 +385,15 @@ if (rejectionRate > REJECTION_RATE_CEILING) {
     .map(([reason, count]) => `${count}x ${reason}`)
     .join('; ');
   stop(
-    `decode rejection rate ${(rejectionRate * 100).toFixed(1)}% exceeds the ` +
-      `${(REJECTION_RATE_CEILING * 100).toFixed(0)}% ceiling. ` +
-      `${refused.length} of ${tclkLines} tclk lines in the export failed the installed ` +
-      `decoder, @flop-labs/tclk ${installedDecoderVersion()}` +
-      (shapeRefused === 0
-        ? ''
-        : `, or passed it and failed this reader's shape check (${shapeRefused} of them)`) +
-      `, so no findings file was written. Top reasons: ${top}`,
+    `unverified rate ${(unverifiedRate * 100).toFixed(1)}% exceeds the ` +
+      `${ceilingPercent}% ceiling. ` +
+      `${unverified} of ${judgedLines} lines in the export are not a frame this run would apply: ` +
+      `${decoderRejected} rejected by the installed decoder, @flop-labs/tclk ` +
+      `${installedDecoderVersion()}, ${shapeRefused} refused by the shape check, ` +
+      `${signatureRefused} left out by the signature check, ${scan.nonFrameCount} not tclk lines, ` +
+      `${unparsedLines} lines that did not parse. ` +
+      `${scan.knownGaps.length} known decoder gaps are counted on neither side. ` +
+      `No findings file was written.${top === '' ? '' : ` Top reasons: ${top}`}`,
   );
 }
 
