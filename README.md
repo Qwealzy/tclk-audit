@@ -19,8 +19,7 @@ their authors. This tool does not speak for them.
 
 Four were found on 2026-09-11 and all four were fixed the same day. What each fix left behind is
 listed with it. Dates here are UTC, the clock the findings files stamp. Numbers further down were
-taken on different dates, and some of them predate these fixes. The 2026-09-05 findings file carries
-its own older list, from before any of this.
+taken on different dates, and some of them predate these fixes.
 
 - **Later refusals are no longer all chained to the first** (9f367e8, e458750, 2026-09-11). Until
   then, once one transition was refused, the audit counted every later refusal in the same offer's
