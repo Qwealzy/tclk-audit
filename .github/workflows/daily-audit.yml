@@ -18,14 +18,10 @@ name: Daily audit
 # The no-signing step below greps for it rather than trusting this comment.
 
 on:
-  # The daily schedule is off until the audit acts on signatures. The run
-  # checks each frame's signature and does not use the result yet, so an
-  # unsigned frame, or one whose signature fails, still moves a contract. Turn
-  # the schedule back on in the change that closes that.
-  #
-  # The decoder rejection table no longer copies field names. Since 8f7341b,
-  # every part of a refusal a stranger chose appears only as its byte length
-  # and SHA-256.
+  # The daily schedule is off. Both reasons it was turned off are fixed. The
+  # decoder rejection table stopped copying field names in 8f7341b, and since
+  # 2f50c03 only a frame whose signature verifies moves a contract. Turning
+  # the schedule back on is a separate decision, not a leftover.
   #
   # Manual runs stay available for testing, and they cannot publish either.
   # The commit step at the end is switched off with `if: false` for the same
@@ -90,10 +86,9 @@ jobs:
       - name: Audit the retained ring
         run: node scripts/scheduled-audit.mjs
 
-      # Switched off until the audit acts on signatures. Until then a frame
-      # that no valid signature backs still moves a contract, and the trigger
-      # makes no difference to that, so no run of any kind commits or pushes.
-      # Remove this `if:` in the change that closes it.
+      # Switched off with the schedule above, and for the same two reasons,
+      # both now fixed. No run of any kind commits or pushes while it stays.
+      # Remove this `if:` in the change that turns the schedule back on.
       - name: Commit the findings
         if: false
         run: |
