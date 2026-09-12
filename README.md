@@ -119,18 +119,36 @@ repository is [`findings/20260905T180055Z.md`](findings/20260905T180055Z.md), fr
 workflow run since 2026-09-08 used 0.1.0 and stopped at the rejection ceiling, so there is no newer
 audit from the installed decoder.
 
-**Expect that to continue for now.** MEASURED on 2026-09-12 by a manual CI run: a 65.1% decode
-rejection rate, 5,597 of 8,596 tclk lines. The ceiling is 5%. Of those refusals 4,732 were accept
-frames missing the required `contract` field, the symptom tracked upstream in
+**Expect that to continue for now.** MEASURED on 2026-09-12 by a manual CI run: 5,597 of 8,596 tclk
+lines failed the installed decoder. Of those, 4,732 were accept frames missing the required
+`contract` field, the symptom tracked upstream in
 [flop-labs/tclk#142](https://github.com/flop-labs/tclk/issues/142), a field report on authenticated
 accepts missing it, and [flop-labs/tclk#147](https://github.com/flop-labs/tclk/issues/147), which
 measures how much of the board it covers. Both are open. INFERRED from that: the traffic has moved
 past the installed 0.1.0 decoder.
 
-A run in that state writes no file, prints one `::error::` line carrying the rate, the decoder
-version and the top reasons, and exits non-zero. So a red daily run is the expected outcome while
-the gap lasts. The ceiling is deliberate. It is there so a daily file of meaningless counts never
-accumulates, and a missing file for a day stays visible as a gap.
+Two thresholds decide whether a run writes anything, and both are fractions read from the
+environment, `TCLK_MAX_REJECTION_RATE` and `TCLK_MIN_JUDGED_SHARE`. A value that is not a fraction
+between 0 and 1 stops the run rather than disabling the guard silently.
+
+The first is the unverified rate, 5% by default. It counts every line of the export that did not
+become a frame this tool would apply: refused by the decoder, refused by the shape check, left out
+by the signature check for any of its four outcomes, not a tclk line at all, or never parsed. A
+verified frame is the only thing that is not counted. Known decoder gaps, frames a later tclk build
+reads and 0.1.0 does not, are counted on neither side, since they measure the distance between the
+installed decoder and the traffic rather than a fault in either.
+
+The second is a floor on how much of the export was judged at all, a tenth by default. Because known
+gaps sit outside the rate, an export that is almost entirely gaps would measure a remnant and call it
+clean, and a gap costs nothing to forge: 0.1.0 stops at its first refusal, so any frame carrying
+`ref` on a refund or a reveal, or naming the `heartbeat` type, lands in that category. When fewer
+than a tenth of the lines can be judged, no file is written whatever the rate says.
+
+A run that stops on either one writes no file, prints one `::notice::` line carrying the numbers, and
+**ends green**. Refusing to write is the decision these thresholds exist to make, and reporting it as
+a failure would teach a reader that a red run here means nothing. A run ends red only for something
+it does not handle, such as an export it could not fetch. So a quiet daily run that commits nothing
+is the expected outcome while the gap lasts, and a missing file for a day stays visible as a gap.
 
 ---
 
@@ -361,10 +379,13 @@ One run covers whatever the ring holds, and that depends on traffic. The two mea
 Each file states its own window in seq and hours, so the accumulated history reads as a series of
 samples rather than a continuous record.
 
-The run fails instead of writing a useless file. It stops if the export is empty, if no frames
-decode, or if the decode rejection rate rises far above the measured 0.7% baseline. In that last case
-it reports the rate, the decoder version and the top rejection reasons. It does not guess at the
-cause.
+The run stops instead of writing a useless file. It stops if no frame in the export is usable, if the
+unverified rate rises far above the measured 0.7% baseline, or if known decoder gaps leave too little
+of the export to judge. Each of those reports the counts behind it and ends the run green without a
+file, and the rate one also names the decoder version and the top refusal reasons. None of them
+guesses at the cause. An export it could
+not fetch, one that came back empty, or one with no parseable record ends the run red instead, since
+none of those is a reading of the room.
 
 ---
 

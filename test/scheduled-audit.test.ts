@@ -377,6 +377,54 @@ describe('the scheduled run, offline', () => {
     expect(run.stdout).toContain('not tclk lines');
   }, 60_000);
 
+  /**
+   * A line 0.1.0 refuses for a known gap. It stops at its first refusal, and it
+   * walks the keys in the order the line carries them, so a `ref` placed first
+   * on a refund makes the whole frame a gap whatever else is wrong with it.
+   * That is the laundering the judged-share floor is for.
+   */
+  function gapLine(seq: number, junk = false): string {
+    const from = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
+    const frame = junk
+      ? `{"type":"refund","ref":"x","junk":"garbage","contract":12345}`
+      : `{"contract":"0x${'ab'.repeat(32)}","from":"${from}","nonce":"0123456789abcdef","type":"heartbeat"}`;
+    return JSON.stringify({ seq, ts: '2026-09-05T16:59:00.000000Z', from, text: 'tclk1 ' + frame });
+  }
+
+  it('refuses to write when known gaps swallow the export', () => {
+    // The reported hole. Gaps are on neither side of the rate, so 100 healthy
+    // frames among 10,000 forged gaps read as 0.000% and wrote a file from one
+    // line in a hundred. A gap costs nothing to forge.
+    const junk = Array.from({ length: 10_000 }, (_, n) => gapLine(500_000 + n, true));
+    const run = runScheduledAudit('gap-flood', [...fixture.slice(0, 100), ...junk]);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.outcome).toBe('ceiling-stop');
+    expect(existsSync(run.outDir)).toBe(false);
+    expect(run.stdout).toContain('% of the export could be judged, under the 10% floor.');
+    expect(run.stdout).toContain('10000 of 10100 lines are frames the installed decoder does not read');
+  }, 120_000);
+
+  it('does not round a share up to the floor it fell under', () => {
+    // 1,200 judged lines against 10,801 gaps is 9.9992%, which rounds to 10 at
+    // three digits. Printed beside a 10% floor it would argue with itself.
+    const gaps = Array.from({ length: 10_801 }, (_, n) => gapLine(520_000 + n));
+    const run = runScheduledAudit('rounding', [...fixture, ...gaps]);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.outcome).toBe('ceiling-stop');
+    expect(run.stdout).toContain('only 9.99% of the export could be judged, under the 10% floor.');
+  }, 120_000);
+
+  it('still writes when known gaps are the share the live ring shows', () => {
+    // MEASURED 2026-09-11: 19 gaps in 18,317 records, 0.1%. Ten here against
+    // the fixture is about the same, and three orders of magnitude from the floor.
+    const gaps = Array.from({ length: 10 }, (_, n) => gapLine(510_000 + n));
+    const run = runScheduledAudit('gap-normal', [...fixture, ...gaps]);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.outcome).toBe('written');
+    expect(readdirSync(run.outDir)).toEqual([STAMP + '.md']);
+    expect(readFileSync(join(run.outDir, STAMP + '.md'), 'utf8')).toContain('| Known decoder gaps | 10 |');
+  }, 60_000);
+
   it('does not count a known decoder gap against the ceiling', () => {
     // A frame a later tclk build reads and 0.1.0 does not. It measures the
     // distance between the installed decoder and the traffic, so it is counted

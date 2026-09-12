@@ -61,6 +61,57 @@ const ROOM = process.env['TCLK_ROOM'] ?? 'tclk-offers';
 const OUT_DIR = process.env['TCLK_OUT_DIR'] ?? 'findings';
 
 /**
+ * A fraction from the environment, or the default when nothing is set.
+ *
+ * A value that does not parse would be `NaN`, and every comparison against
+ * `NaN` is false, so a guard set that way would be off and nothing would say
+ * so. The run stops instead, and stops red.
+ *
+ * Falling back to the default was the other option. It keeps the job running,
+ * and that is the reason against it. The operator would see a green run under a
+ * setting they did not choose, and the value they meant would never take
+ * effect. This way the run says once that the setting is wrong, and waits.
+ *
+ * `Number('')` is 0, and `??` does not fall back for an empty string, so an
+ * unset-but-present variable would silently mean a threshold of nothing. Blank
+ * is treated as absent.
+ *
+ * The setting is never printed as it was given. It comes from the environment,
+ * and this line goes to a public log. The parsed number is printed, which is a
+ * finite fraction by the time anything reads it.
+ */
+function fraction(name, fallback) {
+  const setting = (process.env[name] ?? '').trim();
+  if (setting === '') return fallback;
+  const value = Number(setting);
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    // `fail` ends the process, so nothing below runs.
+    fail(`${name} is set to something that is not a fraction between 0 and 1`);
+  }
+  return value;
+}
+
+/** A fraction as a percentage. A small one must not print as 0%. */
+function percent(value) {
+  const scaled = value * 100;
+  return Number.isInteger(scaled) ? String(scaled) : String(Number(scaled.toPrecision(3)));
+}
+
+/**
+ * The same, rounded down rather than to nearest. A measured share printed
+ * beside the threshold it fell under must not round up to meet it. PROBED
+ * 2026-09-12: a share of 9.9992% read as "only 10% ... under the 10% floor",
+ * which is a sentence that argues with itself.
+ */
+function percentBelow(value) {
+  const scaled = value * 100;
+  if (scaled === 0) return '0';
+  const digits = Math.max(0, 3 - Math.ceil(Math.log10(scaled)));
+  const factor = 10 ** digits;
+  return String(Math.floor(scaled * factor) / factor);
+}
+
+/**
  * The rejection rate above which this run refuses to write a file.
  *
  * MEASURED twice against the live ring on 2026-09-05: 82 rejections in 12,231
@@ -82,41 +133,28 @@ const OUT_DIR = process.env['TCLK_OUT_DIR'] ?? 'findings';
  * The rate is measured over the whole export, not over decoded lines alone.
  * See the ceiling below for what counts.
  */
-// `Number('')` is 0, and `??` does not fall back for an empty string, so an
-// unset-but-present variable would silently mean a ceiling of nothing. An
-// empty or blank value is treated as absent.
-const CEILING_SETTING = (process.env['TCLK_MAX_REJECTION_RATE'] ?? '').trim();
-const REJECTION_RATE_CEILING = CEILING_SETTING === '' ? 0.05 : Number(CEILING_SETTING);
+const REJECTION_RATE_CEILING = fraction('TCLK_MAX_REJECTION_RATE', 0.05);
 
 /**
- * A ceiling that does not parse would be `NaN`, and every comparison against
- * `NaN` is false, so the guard would be off and nothing would say so. The run
- * stops instead, and stops red.
- *
- * Falling back to the default was the other option. It keeps the job running,
- * and that is the reason against it. The operator would see a green run under a
- * ceiling they did not set, and the value they meant to set would never take
- * effect. This way the run says once that the setting is wrong, and waits.
- *
- * The setting is never printed as it was given. It comes from the environment,
- * and this line goes to a public log. The parsed number is printed, which is a
- * finite fraction by the time anything reads it.
+ * The least share of the export this run must be able to judge before it writes
+ * anything. Known decoder gaps are the only lines it cannot, so this is a floor
+ * on volume rather than on faults. The reasoning for a tenth is at the check.
  */
-if (!Number.isFinite(REJECTION_RATE_CEILING) || REJECTION_RATE_CEILING < 0 || REJECTION_RATE_CEILING > 1) {
-  fail('TCLK_MAX_REJECTION_RATE is set to something that is not a fraction between 0 and 1');
-}
+const MIN_JUDGED_SHARE = fraction('TCLK_MIN_JUDGED_SHARE', 0.1);
 
-/** The ceiling as a percentage. A small one must not print as 0%. */
-const ceilingPercent = (() => {
-  const percent = REJECTION_RATE_CEILING * 100;
-  return Number.isInteger(percent) ? String(percent) : String(Number(percent.toPrecision(3)));
-})();
+const ceilingPercent = percent(REJECTION_RATE_CEILING);
 
 if (REJECTION_RATE_CEILING >= 1) {
   // A ceiling of 1 is inside the range and can never fire, since a rate is at
   // most 1. Whoever set it gets to know that the guard is off.
   console.log(
     `::notice::scheduled-audit: the rejection ceiling is ${ceilingPercent}%, so it cannot stop this run.`,
+  );
+}
+
+if (MIN_JUDGED_SHARE <= 0) {
+  console.log(
+    `::notice::scheduled-audit: the judged-share floor is ${percent(MIN_JUDGED_SHARE)}%, so it cannot stop this run.`,
   );
 }
 
@@ -369,6 +407,40 @@ const unverified = judgedLines - scan.frames.length;
 // above catches that first today. This side stays closed if it ever moves.
 const unverifiedRate = judgedLines === 0 ? 1 : unverified / judgedLines;
 
+/**
+ * How much of the export the rate below is able to judge.
+ *
+ * Known decoder gaps are on neither side of that rate, so a run where they are
+ * nearly everything measures a remnant and calls it clean. PROBED 2026-09-12:
+ * 100 healthy frames and 10,000 lines shaped as gaps gave a rate of 0.000% and
+ * wrote a file built from one line in a hundred. A gap is cheap to forge, since
+ * the 0.1.0 decoder stops at its first refusal, so any frame carrying `ref` on
+ * a refund or a reveal, or naming the `heartbeat` type, lands in that category
+ * whatever else is wrong with it. Anyone who can post to the room can do it.
+ *
+ * So the rate is not the only question. This one runs first, and asks whether
+ * there was enough left to judge at all.
+ *
+ * The floor is a tenth, and it is about volume rather than fault. MEASURED
+ * 2026-09-11 on the live ring: 19 known gaps in 18,317 records, which is 0.1%,
+ * three orders of magnitude clear of this floor. For the ecosystem to trip it
+ * honestly, more than nine lines in ten would have to be frames this decoder
+ * cannot read, and at that point the installed decoder cannot audit the room at
+ * all, which is the same thing the ceiling says. The forged case sits at 99%.
+ */
+const judgedShare = totalLines === 0 ? 0 : judgedLines / totalLines;
+
+if (totalLines > 0 && judgedShare < MIN_JUDGED_SHARE) {
+  stop(
+    `only ${percentBelow(judgedShare)}% of the export could be judged, under the ` +
+      `${percent(MIN_JUDGED_SHARE)}% floor. ${scan.knownGaps.length} of ${totalLines} lines are frames ` +
+      `the installed decoder does not read, @flop-labs/tclk ${installedDecoderVersion()}, and those are ` +
+      `counted on neither side of the rejection rate. That leaves ${judgedLines} lines judged, ` +
+      `${scan.frames.length} of them verified. A file from that would describe a sliver of the room, so ` +
+      `none was written.`,
+  );
+}
+
 if (unverifiedRate > REJECTION_RATE_CEILING) {
   // A rate this far above the floor means most of the room did not become a
   // frame this run would apply. That has had more than one cause. The decoder
@@ -396,6 +468,7 @@ if (unverifiedRate > REJECTION_RATE_CEILING) {
       `No findings file was written.${top === '' ? '' : ` Top reasons: ${top}`}`,
   );
 }
+
 
 const nowMs = Date.now();
 const { bindings, mismatches } = bindContracts(scan.frames);
