@@ -48,7 +48,7 @@
  * not count toward the decode rejection ceiling below.
  */
 
-import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { Transport } from 'technocore-client';
@@ -135,13 +135,73 @@ function installedDecoderVersion() {
   }
 }
 
+/**
+ * How a run ended, for the workflow to read. Three outcomes, two exit codes.
+ *
+ *   - `written`: a findings file exists. Exit 0, and the commit step takes it.
+ *   - `ceiling-stop`: the run measured its input and refused to write. Exit 0,
+ *     because refusing is the decision the ceiling exists to make. A red run
+ *     for a working guard trains a reader to ignore red, and the next real
+ *     fault arrives in that noise.
+ *   - `error`: something the run does not handle. Exit 1, and the job is red.
+ *
+ * An exception nobody caught writes no outcome at all. The job is red then
+ * too, and the commit step, which runs only on `written`, stays out.
+ */
+function setOutcome(outcome) {
+  const file = process.env['GITHUB_OUTPUT'];
+  if (file !== undefined && file !== '') appendFileSync(file, `outcome=${outcome}\n`, 'utf8');
+}
+
+/** A line in the job summary, when the runner gives one. */
+function summary(text) {
+  const file = process.env['GITHUB_STEP_SUMMARY'];
+  if (file !== undefined && file !== '') appendFileSync(file, `${text}\n`, 'utf8');
+}
+
+/**
+ * The run refused to write a file, on purpose. It says so and ends green.
+ * The ::notice:: prefix puts the line in the run's annotations, where a
+ * reader sees it without opening the log.
+ */
+function stop(message) {
+  console.log(`::notice::scheduled-audit: ${message}`);
+  summary(`**No findings file.** ${message}`);
+  setOutcome('ceiling-stop');
+  process.exit(0);
+}
+
 function fail(message, error) {
   // The ::error:: prefix surfaces this in the Actions log and the job summary.
   // Without it the message sits in step output nobody opens.
   console.error(`::error::scheduled-audit: ${message}`);
   if (error !== undefined) console.error(String(error instanceof Error ? error.message : error));
+  summary(`**Failed.** ${message}`);
+  setOutcome('error');
   process.exit(1);
 }
+
+/**
+ * Anything thrown that nothing else catches. Without this the run still ends
+ * red, since node exits non-zero, and the commit step still stays out, since it
+ * asks for `written`. This names the outcome instead of leaving it unset.
+ *
+ * The class and where it was thrown are printed. The message is not. A message
+ * can carry text from a room, as the 0.1.0 decoder's refusals do, and this line
+ * goes to a public log.
+ */
+function unexpected(error) {
+  const where = String(error?.stack ?? '')
+    .split('\n')
+    .find((line) => line.trim().startsWith('at '));
+  fail(
+    `unhandled ${error?.constructor?.name ?? typeof error}` +
+      (where === undefined ? '' : ` ${where.trim().replace(/^at /, 'at ')}`),
+  );
+}
+
+process.on('uncaughtException', unexpected);
+process.on('unhandledRejection', unexpected);
 
 const transport = new Transport();
 
@@ -186,12 +246,17 @@ const decoderRejected = byDecoder(scan.rejections).length;
 const shapeRefused = byShapeCheck(scan.rejections).length;
 const signatureRefused = bySignatureCheck(scan.rejections).length;
 
-// Three ways a run can produce nothing useful. Each fails before anything is
+// Three ways a run can produce nothing useful. Each stops before anything is
 // written. A missing file for a day is a visible gap. A file full of zeroes is
 // a lie that accumulates.
+//
+// The two that measured the export and refused it, here and at the ceiling
+// below, end green. The reading was the job, and it was done. An export that
+// could not be read at all, was empty, or held no parseable record is not a
+// reading. Something upstream is wrong, and that stays red.
 
 if (scan.frames.length === 0) {
-  fail(
+  stop(
     `no usable frames in ${records.length} records: ` +
       `${decoderRejected} rejected by the decoder, ` +
       `${shapeRefused} refused by the shape check, ${signatureRefused} left out by the signature check, ` +
@@ -224,7 +289,7 @@ if (rejectionRate > REJECTION_RATE_CEILING) {
     .slice(0, 5)
     .map(([reason, count]) => `${count}x ${reason}`)
     .join('; ');
-  fail(
+  stop(
     `decode rejection rate ${(rejectionRate * 100).toFixed(1)}% exceeds the ` +
       `${(REJECTION_RATE_CEILING * 100).toFixed(0)}% ceiling. ` +
       `${refused.length} of ${tclkLines} tclk lines in the export failed the installed ` +
@@ -551,6 +616,11 @@ console.log(
     `${boardSignatures.unverifiable + dealSignatures.unverifiable} unverifiable`,
 );
 console.log(`  read budget after run: ${JSON.stringify(transport.budget.read)}`);
+setOutcome('written');
+summary(
+  `**Wrote \`${stamp}.md\`.** Window ${windowFirst}..${windowLast}, ${scan.frames.length} frames, ` +
+    `${report.threadCount} threads.`,
+);
 if (badSignatures > 0) {
   // The ::warning:: prefix puts this in the job summary. Signatures that do not
   // verify are the one count here that can point at this tool. The line is

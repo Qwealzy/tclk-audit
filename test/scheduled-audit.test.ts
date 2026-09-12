@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -82,18 +83,28 @@ interface Run {
   readonly stdout: string;
   readonly stderr: string;
   readonly outDir: string;
+  /** What the run wrote to GITHUB_OUTPUT, as the workflow would read it. */
+  readonly outcome: string | null;
+  /** What it wrote to GITHUB_STEP_SUMMARY. */
+  readonly summary: string;
 }
 
 function runScheduledAudit(
   name: string,
   exportLines: readonly string[],
   rooms: Readonly<Record<string, string>> = {},
+  build: string = BUILD,
 ): Run {
   const exportPath = join(scratch, name + '.jsonl');
   const roomsPath = join(scratch, name + '-rooms.json');
   const outDir = join(scratch, name + '-out');
+  // The two files a GitHub runner gives a step. The run appends to them.
+  const outputPath = join(scratch, name + '-output.txt');
+  const summaryPath = join(scratch, name + '-summary.md');
   writeFileSync(exportPath, exportLines.join(LF) + LF);
   writeFileSync(roomsPath, JSON.stringify(rooms));
+  writeFileSync(outputPath, '');
+  writeFileSync(summaryPath, '');
 
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env['TCLK_MAX_REJECTION_RATE'];
@@ -102,7 +113,7 @@ function runScheduledAudit(
     [
       '--import',
       pathToFileURL(at('test', 'support', 'fake-fetch.mjs')).href,
-      join(BUILD, 'scripts', 'scheduled-audit.mjs'),
+      join(build, 'scripts', 'scheduled-audit.mjs'),
     ],
     {
       encoding: 'utf8',
@@ -113,10 +124,21 @@ function runScheduledAudit(
         FAKE_NOW: NOW,
         TCLK_ROOM: 'tclk-offers',
         TCLK_OUT_DIR: outDir,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_STEP_SUMMARY: summaryPath,
       },
     },
   );
-  return { status: run.status, stdout: run.stdout, stderr: run.stderr, outDir };
+  const written = readFileSync(outputPath, 'utf8');
+  const match = /^outcome=(.*)$/m.exec(written);
+  return {
+    status: run.status,
+    stdout: run.stdout,
+    stderr: run.stderr,
+    outDir,
+    outcome: match?.[1]?.trim() ?? null,
+    summary: readFileSync(summaryPath, 'utf8'),
+  };
 }
 
 beforeAll(() => {
@@ -162,6 +184,9 @@ describe('the scheduled run, offline', () => {
     expect(lines(synthetic).some((l) => l.includes(contract.slice(2)))).toBe(true);
     const run = runScheduledAudit('passes', [...fixture, ...crafted, ...shapes], { [room]: synthetic });
     expect(run.status, run.stderr).toBe(0);
+    // The outcome the commit step asks for. Only this one lets it run.
+    expect(run.outcome).toBe('written');
+    expect(run.summary).toContain(`**Wrote \`${STAMP}.md\`.**`);
     expect(readdirSync(run.outDir)).toEqual([STAMP + '.md']);
 
     const written = readFileSync(join(run.outDir, STAMP + '.md'), 'utf8');
@@ -302,28 +327,36 @@ describe('the scheduled run, offline', () => {
     });
   }
 
-  it('stops at the rejection ceiling, writes nothing, and prints one inert error line', () => {
-    expect(crafted).toHaveLength(5);
-    // Sixty copies of each crafted rejection take the rate past the 5% ceiling.
-    const many = crafted.flatMap((line, i) =>
+  /** Sixty copies of each crafted rejection take the rate past the 5% ceiling. */
+  function overTheCeiling(): string[] {
+    return crafted.flatMap((line, i) =>
       Array.from({ length: 60 }, (_, n) => {
         const record = JSON.parse(line) as Record<string, unknown>;
         record['seq'] = 800_000 + i * 100 + n;
         return JSON.stringify(record);
       }),
     );
-    const run = runScheduledAudit('ceiling', [...fixture, ...many]);
-    expect(run.status).toBe(1);
+  }
+
+  it('stops at the rejection ceiling green, writes nothing, and prints one inert notice', () => {
+    expect(crafted).toHaveLength(5);
+    const run = runScheduledAudit('ceiling', [...fixture, ...overTheCeiling()]);
+    // Refusing to write is the decision the ceiling exists to make, so the run
+    // ends green and says why. A red run here would train a reader to ignore red.
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stderr).toBe('');
+    expect(run.outcome).toBe('ceiling-stop');
+    expect(run.summary).toContain('**No findings file.** decode rejection rate');
     expect(existsSync(run.outDir)).toBe(false);
 
     // The runner splits on LF and on CR, and reads each line for commands.
-    const printed = run.stderr
+    const printed = run.stdout
       .split(LF)
       .flatMap((line) => line.split(CR))
-      .filter((line) => line.length > 0);
+      .filter((line) => line.startsWith('::'));
     expect(printed).toHaveLength(1);
     const line = printed[0] ?? '';
-    expect(line.startsWith('::error::scheduled-audit: decode rejection rate')).toBe(true);
+    expect(line.startsWith('::notice::scheduled-audit: decode rejection rate')).toBe(true);
     // It states what was measured, the decoder included, and guesses no cause.
     const installed = JSON.parse(
       readFileSync(at('node_modules', '@flop-labs', 'tclk', 'package.json'), 'utf8'),
@@ -342,5 +375,42 @@ describe('the scheduled run, offline', () => {
       expect(line).not.toContain(fragment);
     }
     expect(line).toMatch(/^[\x20-\x7e]+$/);
+  }, 60_000);
+
+  it('stays red when the export cannot be read, which is not a decision it made', () => {
+    // An empty export is not a reading of the room. Something upstream is
+    // wrong, and that is the case the red run is for.
+    const run = runScheduledAudit('empty-export', []);
+    expect(run.status).toBe(1);
+    expect(run.outcome).toBe('error');
+    expect(run.stdout).not.toContain('::notice::');
+    expect(run.stderr).toContain('::error::scheduled-audit: export of /r/tclk-offers was empty');
+    expect(existsSync(run.outDir)).toBe(false);
+  }, 60_000);
+
+  it('stays red when something throws where nothing catches it', () => {
+    // The same input as the green ceiling run above. The only difference is a
+    // decode that throws, injected into a copy of the build rather than into
+    // src, so this proves the split is a real distinction and not a blanket
+    // green.
+    const broken = join(BUILD, '..', 'scheduled-audit-test-broken');
+    rmSync(broken, { recursive: true, force: true });
+    cpSync(BUILD, broken, { recursive: true });
+    const framesPath = join(broken, 'dist', 'src', 'frames.js');
+    const patched = readFileSync(framesPath, 'utf8').replace(
+      'export function scanRecords(',
+      'export function scanRecords() {\n    throw new TypeError("injected decode failure");\n}\nexport function unusedScanRecords(',
+    );
+    writeFileSync(framesPath, patched);
+
+    const run = runScheduledAudit('injected', [...fixture, ...overTheCeiling()], {}, broken);
+    expect(run.status).toBe(1);
+    expect(run.stdout).not.toContain('::notice::');
+    expect(run.outcome).toBe('error');
+    expect(run.stderr).toContain('::error::scheduled-audit: unhandled TypeError at ');
+    // The class and the place, never the message, which can carry room text.
+    expect(run.stderr).not.toContain('injected decode failure');
+    expect(existsSync(run.outDir)).toBe(false);
+    rmSync(broken, { recursive: true, force: true });
   }, 60_000);
 });

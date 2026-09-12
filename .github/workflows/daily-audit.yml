@@ -78,12 +78,25 @@ jobs:
       # after the cursor, capped at 200, so a job starting with no cursor can
       # never catch up.
       - name: Audit the retained ring
+        id: audit
         run: node scripts/scheduled-audit.mjs
 
-      # The audit step above exits non-zero when it refuses to write a file, at
-      # the rejection ceiling for one. The job fails there and this step never
-      # runs, so nothing is committed unless a findings file was written.
+      # The audit step reports one of three outcomes.
+      #
+      #   written       a findings file exists, and this step commits it
+      #   ceiling-stop  the run measured the export and refused to write. The
+      #                 step ends green, because refusing is the decision the
+      #                 ceiling is there to make
+      #   error         something the run does not handle. The step is red
+      #
+      # An exception nobody caught leaves the outcome unset. The step is red
+      # then too, and this one does not run, since it asks for `written`.
+      #
+      # The job's colour is the audit step's exit code, so a red run means a
+      # fault rather than a working guard. A reader who learns to ignore red
+      # will miss the next real one.
       - name: Commit the findings
+        if: steps.audit.outputs.outcome == 'written'
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
