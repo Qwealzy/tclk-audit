@@ -1,8 +1,5 @@
 name: Daily audit
 
-# The schedule is off, and so is the commit step. See the notes under `on:`
-# and above the commit step.
-#
 # Once a day: export the retained tclk-offers ring, run the structural checks,
 # and commit the findings file. The history accumulates into a public record.
 #
@@ -18,19 +15,16 @@ name: Daily audit
 # The no-signing step below greps for it rather than trusting this comment.
 
 on:
-  # The daily schedule is off. Both reasons it was turned off are fixed. The
-  # decoder rejection table stopped copying field names in 8f7341b, and since
-  # 2f50c03 only a frame whose signature verifies moves a contract. Turning
-  # the schedule back on is a separate decision, not a leftover.
+  # The schedule was off from 2026-09-11 while two defects stood. The decoder
+  # rejection table copied field names until 8f7341b, and a frame that no valid
+  # signature backed still moved a contract until 2f50c03. Both are fixed, so
+  # the run publishes again from 2026-09-12.
   #
-  # Manual runs stay available for testing, and they cannot publish either.
-  # The commit step at the end is switched off with `if: false` for the same
-  # reason.
-  #
-  # schedule:
-  #   # 06:20 UTC. Off the hour on purpose. Every cron job on the platform fires
-  #   # at the top of the hour, and this one has no reason to join that queue.
-  #   - cron: '20 6 * * *'
+  # A manual run commits what it finds, the same as a scheduled one.
+  schedule:
+    # 06:20 UTC. Off the hour on purpose. Every cron job on the platform fires
+    # at the top of the hour, and this one has no reason to join that queue.
+    - cron: '20 6 * * *'
   workflow_dispatch:
 
 # Only one run at a time. Two overlapping runs would race on the push.
@@ -86,11 +80,10 @@ jobs:
       - name: Audit the retained ring
         run: node scripts/scheduled-audit.mjs
 
-      # Switched off with the schedule above, and for the same two reasons,
-      # both now fixed. No run of any kind commits or pushes while it stays.
-      # Remove this `if:` in the change that turns the schedule back on.
+      # The audit step above exits non-zero when it refuses to write a file, at
+      # the rejection ceiling for one. The job fails there and this step never
+      # runs, so nothing is committed unless a findings file was written.
       - name: Commit the findings
-        if: false
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
