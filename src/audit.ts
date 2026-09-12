@@ -113,7 +113,9 @@ export interface AuditOptions {
   readonly nowMs: number;
   /**
    * Threads whose earliest frame falls within this fraction of the start of
-   * the scanned window are not reported as orphans.
+   * the window are not reported as orphans. That window is `windowFirstSeq` to
+   * `windowLastSeq`, over verified frames only, so no refused line can move the
+   * boundary and hide a thread behind it.
    *
    * MEASURED 2026-09-05 on the full retained `tclk-offers` ring: of 5 accepts
    * whose offer was absent, 4 were in the first 5% of the window and all 5 were
@@ -134,6 +136,12 @@ export interface ThreadOutcome {
 }
 
 export interface AuditReport {
+  /**
+   * The first and last seq this audit read. Verified frames only, whether
+   * attributed to a thread or not, and null when there were none. A refused
+   * line is not in it, whoever sent it. The findings file states the ring's
+   * own range instead, which is wider and counts every tclk line.
+   */
   readonly windowFirstSeq: bigint | null;
   readonly windowLastSeq: bigint | null;
   readonly threadCount: number;
@@ -196,14 +204,33 @@ export function audit(
 ): AuditReport {
   const warmup = options.warmupFraction ?? DEFAULT_WARMUP_FRACTION;
 
-  // A frame the signature check left out counts toward neither the window nor
-  // the warm-up boundary. It is left out the way a frame in the wrong room is,
-  // and that one never reaches this function. A line the decoder or the shape
-  // check refused still counts, as before. This package's own rule.
+  // The window is every verified frame this audit read, attributed to a thread
+  // or not. A frame is in it once it has decoded, passed the shape check and
+  // verified. Nothing else is. Not a line the decoder refused, not one the
+  // shape check refused, not one the signature check left out, and not a frame
+  // in the wrong room, which never reaches this function.
+  //
+  // PROBED 2026-09-12, while refused lines still counted: one unsigned message
+  // reading `tclk1 {"type":"lock"}` moved the boundary from 1040 to 1200 in a
+  // 1000..1200 window and hid an orphan accept at 1100. That line needs no key,
+  // no signature, and no frame the decoder can read. On the committed fixture,
+  // four such lines erased a real accept-without-offer finding.
+  //
+  // What this does not do is make the window unreachable. A verified frame
+  // still sets it, and STATED [technocore-client identity.d.ts]: a did:key is
+  // generated locally and "nothing registers it". So the price of moving the
+  // boundary is one frame that passes all three checks, rather than one line of
+  // any kind.
+  //
+  // Two verified frames are in the window without being folded: one whose
+  // timestamp does not parse, and one that no thread claimed. Both are frames
+  // this audit read, which is what the window measures.
+  //
+  // This is the audit's own window. The findings file states a wider one, every
+  // tclk line in the ring, and computes it separately. See scheduled-audit.mjs.
   const allSeqs: bigint[] = [];
   for (const thread of index.threads) for (const r of thread.frames) allSeqs.push(r.seq);
   for (const r of index.unattributed) allSeqs.push(r.seq);
-  for (const r of rejections) if (r.refusedBy !== 'signature-check') allSeqs.push(r.seq);
 
   const windowFirstSeq = allSeqs.length === 0 ? null : allSeqs.reduce((a, b) => (b < a ? b : a));
   const windowLastSeq = allSeqs.length === 0 ? null : allSeqs.reduce((a, b) => (b > a ? b : a));

@@ -413,36 +413,19 @@ describe('the follower', () => {
 });
 
 describe('the audit window', () => {
-  /**
-   * An accept whose offer is missing, at seq 100, after one verified frame at
-   * seq 10. With nothing else the window is 10..100, the warm-up boundary is 28,
-   * and the accept is reported. A line at seq 1000 that counted would move the
-   * boundary to 208 and hide it.
-   */
-  function orphanWith(extra: RoomRecord): AuditReport {
+  it('does not count a frame the signature check left out', () => {
+    // window.test.ts has the rule and the rest of its cases. This is the one
+    // that belongs to the signature policy.
     const d = newDeal();
     const other = newDeal();
     const board = [
       post(other.payer, OFFER_ROOM, 10, 0, encodeFrame(other.offer)),
       post(d.payee, OFFER_ROOM, 100, 1, encodeFrame(d.accept)),
-      extra,
+      unsigned(d.payer.did, 1000, 2, lockText(d.payer.did, d)),
     ];
     const scan = scanRecords(board, { room: OFFER_ROOM });
-    return audit(buildThreads(scan.frames), scan.rejections, { nowMs: NOW });
-  }
-
-  it('leaves out a frame the signature check left out', () => {
-    const d = newDeal();
-    const report = orphanWith(unsigned(d.payer.did, 1000, 2, lockText(d.payer.did, d)));
+    const report = audit(buildThreads(scan.frames), scan.rejections, { nowMs: NOW });
     expect([report.windowFirstSeq, report.windowLastSeq]).toEqual([10n, 100n]);
     expect(report.findings.map((f) => f.code)).toContain('accept-without-offer');
-  });
-
-  it('still counts a line the decoder refused, as before', () => {
-    const d = newDeal();
-    const refused = post(d.payer, OFFER_ROOM, 1000, 2, 'tclk1 {"type":"lock"}');
-    const report = orphanWith(refused);
-    expect([report.windowFirstSeq, report.windowLastSeq]).toEqual([10n, 1000n]);
-    expect(report.findings.map((f) => f.code)).not.toContain('accept-without-offer');
   });
 });
