@@ -3,20 +3,25 @@
 > [!CAUTION]
 > **Known broken and under repair. Do not rely on this tool or its findings.**
 >
-> One open defect affects everything below, the second listed. The other two are fixed, each with a
-> limit noted. Banner added 2026-09-11 and revised the same day, once the tool read deal rooms,
-> checked signatures, chained refusals per contract and rebuilt decoder refusals.
+> No defect listed below is still open. All three are fixed, each with a limit noted. Banner added
+> 2026-09-11 and revised on 2026-09-11 and 2026-09-12, as the tool read deal rooms, chained refusals
+> per contract, rebuilt decoder refusals and began to act on signatures.
 >
 > - **Fixed on 2026-09-11 (9f367e8, e458750): later refusals are no longer all chained to the
 >   first.** Until then, once one transition was refused, the audit counted every later refusal in
 >   the same offer's thread as a downstream consequence of it, whatever its own cause. Now a refusal
 >   the machine gives for any reason other than status is always its own anomaly, and chains are kept
 >   per contract. Two limits remain, described under "Two things measured, not assumed" below.
-> - **Signatures are checked but not acted on.** This README says the tool rebuilds each contract
->   from its signed frames. It checks each frame's signature, and whether the frame's `from` is the
->   key that signed it, and counts the results. The tclk spec says only a verified frame is a
->   commitment (SPEC.md, section 2). The tool does not act on the check yet. An unsigned record, or
->   one whose signature fails, still moves a contract the same as a valid one.
+> - **Fixed on 2026-09-12 (2f50c03): only a frame whose signature verifies moves a contract.** The
+>   tclk spec says only a verified frame is a commitment (SPEC.md, section 2). The tool applies a
+>   frame only when its record's signature verifies and the frame's `from` is the key that signed
+>   it, in `tclk-offers` and in deal rooms alike. Every other decoded frame is left out and counted
+>   by kind. A `from` that names another key breaks a MUST in the spec. A signature that does not
+>   verify is counted on its own, since many at once more likely mean a fault in this tool than many
+>   faulty senders. An unsigned record is "not re-verifiable", which is not "invalid". A signature
+>   the tool could not check is its own limit and is never charged to the sender. Two limits. An
+>   unsigned frame is left out even when its sender is honest. And a file written before this change
+>   counted frames a later one leaves out, so counts across that date do not compare.
 > - **Fixed on 2026-09-11 (8f7341b): a stranger's words no longer pass through a decoder refusal.**
 >   The decoder repeats text a stranger chose in its refusals, such as an unknown field name, a
 >   malformed value or an unknown frame type. This tool no longer passes that message on. It
@@ -360,7 +365,7 @@ cause.
 
 ```bash
 npm install
-npm test          # 234 tests, against a fixture of real frames and signed synthetic contracts
+npm test          # 254 tests, against a fixture of real frames and signed synthetic contracts
 npm run demo      # the three-way comparison
 npm run build
 node examples/live-run.mjs
