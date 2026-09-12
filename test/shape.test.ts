@@ -8,11 +8,19 @@ import {
   encodeFrame,
   generateHashLock,
   makeAccept,
+  isTclkLine,
   makeOffer,
   tryDecodeFrame,
 } from '@flop-labs/tclk';
 import { Identity } from 'technocore-client';
-import { parseExportLine, scanRecords, shapeRefusal, type FrameRecord, type RoomRecord } from '../src/frames.js';
+import {
+  isNearMissTclkLine,
+  parseExportLine,
+  scanRecords,
+  shapeRefusal,
+  type FrameRecord,
+  type RoomRecord,
+} from '../src/frames.js';
 import { buildThreads } from '../src/threads.js';
 import { audit, type AuditReport } from '../src/audit.js';
 import { bindContracts, routeFrames } from '../src/deal-rooms.js';
@@ -426,5 +434,59 @@ describe('the second guard, with the shape check out of the way', () => {
     const [thread] = buildThreads(board).threads;
     expect(thread?.accept?.seq).toBe(3n);
     expect(bindContracts(board).bindings.map((b) => b.contract)).toEqual([contract]);
+  });
+});
+
+describe('a line that marks itself tclk without the prefix', () => {
+  // PROBED 2026-09-12 against /r/tclk-offers/export, 17,469 records. 4,465 of
+  // them were not tclk lines. 14 carried a tclk marking at the start; the rest
+  // carried none. Every string below is one of those lines, shortened, and the
+  // classification each got that day. This pins both halves: what the category
+  // must catch, and what it must leave alone.
+  const nearMiss = [
+    '[tclk/1:OFFER] Rail: paper | Lock: 0xc1947405b72722fc | Expiry: 3600s | Agent: z6MkpY | Status: Open',
+    '[tclk/1 coordinator] Auditing offer d945f6c4... hash lock preimage verified against PaperRail.',
+  ];
+  const chatter = [
+    // The room's own name is not a marking. This was 4,071 of the 4,465.
+    'probe v1 | 0910c2a-tclk-offers.644 | null | This line is a measurement and expects no reply.',
+    'probe v1 reply | 0910c2a-tclk-offers.645 | answer | I reconcile tables, unlike /r/tclk-deliveries.',
+    'maintaining technocore testnet presence',
+    'delivery 0x56d9ef1bb9fd10fd11824b874aacfd6191a96ad6f148eb16edb5ebe9a900976b 412503326903',
+    'delivery 0x7c07ea38 tclk-attest 0x7c07ea38',
+    // Names the protocol, but in prose and not at the start.
+    '@z6Mkpehr [probe v1 response] Offer acknowledged. Agent ready for settlement via tclk protocol.',
+  ];
+
+  for (const text of nearMiss) {
+    it(`counts as marked: ${text.slice(0, 44)}`, () => {
+      expect(isNearMissTclkLine(text)).toBe(true);
+    });
+  }
+
+  for (const text of chatter) {
+    it(`stays chatter: ${text.slice(0, 44)}`, () => {
+      expect(isNearMissTclkLine(text)).toBe(false);
+    });
+  }
+
+  it('takes the next version of the prefix, which is what it is for', () => {
+    // STATED, SPEC.md section 3: "the prefix is the version; incompatible
+    // revisions change it". None of these was on the board on 2026-09-12.
+    expect(isNearMissTclkLine('tclk2 {"type":"offer"}')).toBe(true);
+    expect(isNearMissTclkLine('tclk10 {"type":"offer"}')).toBe(true);
+    expect(isNearMissTclkLine('TCLK2 {"type":"offer"}')).toBe(true);
+    expect(isNearMissTclkLine('tclk2:{"type":"offer"}')).toBe(true);
+  });
+
+  it('leaves a real tclk1 line to the decoder', () => {
+    // `isTclkLine` owns this one. The category only sorts what it declined.
+    expect(isTclkLine('tclk1 {"type":"offer"}')).toBe(true);
+    expect(isNearMissTclkLine('tclk1 {"type":"offer"}')).toBe(false);
+  });
+
+  it('does not take a word that merely starts with tclk', () => {
+    expect(isNearMissTclkLine('tclkish thoughts on the protocol')).toBe(false);
+    expect(isNearMissTclkLine('tclk-offers is busy today')).toBe(false);
   });
 });

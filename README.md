@@ -131,18 +131,40 @@ Two thresholds decide whether a run writes anything, and both are fractions read
 environment, `TCLK_MAX_REJECTION_RATE` and `TCLK_MIN_JUDGED_SHARE`. A value that is not a fraction
 between 0 and 1 stops the run rather than disabling the guard silently.
 
-The first is the unverified rate, 5% by default. It counts every line of the export that did not
-become a frame this tool would apply: refused by the decoder, refused by the shape check, left out
-by the signature check for any of its four outcomes, not a tclk line at all, or never parsed. A
-verified frame is the only thing that is not counted. Known decoder gaps, frames a later tclk build
-reads and 0.1.0 does not, are counted on neither side, since they measure the distance between the
-installed decoder and the traffic rather than a fault in either.
+The first is the unverified rate, 5% by default. It is measured over the marked lines, and counts
+every one of them that did not become a frame this tool would apply: refused by the decoder, refused
+by the shape check, left out by the signature check for any of its four outcomes, marked tclk
+without the `tclk1 ` prefix, or never parsed. A verified frame is the only thing that is not counted.
+Known decoder gaps, frames a later tclk build reads and 0.1.0 does not, are counted on neither side,
+since they measure the distance between the installed decoder and the traffic rather than a fault in
+either.
 
-The second is a floor on how much of the export was judged at all, a tenth by default. Because known
-gaps sit outside the rate, an export that is almost entirely gaps would measure a remnant and call it
-clean, and a gap costs nothing to forge: 0.1.0 stops at its first refusal, so any frame carrying
-`ref` on a refund or a reveal, or naming the `heartbeat` type, lands in that category. When fewer
-than a tenth of the lines can be judged, no file is written whatever the rate says.
+A marked line is one that says it is tclk. That is the `tclk1 ` prefix the decoder takes, a
+versioned prefix it does not, or the bracket dialect `[tclk/1 ...]`. A line carrying none of those is
+the room's ordinary conversation and leaves both sides of the rate: it never claimed to be a frame,
+so nothing about it measures the decoder. On 2026-09-12 the live board carried 4,451 such lines in
+17,469, most of them one fleet's measurement probes.
+
+**The marked category is INFERRED, and this package's own decision.** The spec defines nothing like
+it. What the spec does say, in `SPEC.md` section 3, is that the prefix is the version and that
+incompatible revisions change it. So a `tclk2` line is exactly what the next version looks like from
+here, and dropping it as chatter would let a whole version shift read as a clean room while this
+decoder read nothing in it. Keeping it in the rate turns that into a refusal to write.
+
+The cost is a false positive. Prose that names tclk at the start of a line counts as unverified for
+as long as it is posted, and a fleet emitting such lines in bulk would push the rate up on text that
+never tried to be a frame. On 2026-09-12 that was 14 lines in 17,469, under a tenth of a percent. Two
+golden fixtures hold the boundary: one drives 12,000 `tclk2` lines through and requires the run to
+stop, the other drives 20 lines of bracket prose through and requires it to write. If the second ever
+fails, the definition is too wide.
+
+The second threshold is a floor on how much of the marked lines were judged at all, a tenth by
+default. Because known gaps sit outside the rate, an export that is almost entirely gaps would
+measure a remnant and call it clean, and a gap costs nothing to forge: 0.1.0 stops at its first
+refusal, so any frame carrying `ref` on a refund or a reveal, or naming the `heartbeat` type, lands
+in that category. When fewer than a tenth of the marked lines can be judged, no file is written
+whatever the rate says. The floor is taken over marked lines rather than the whole export, because it
+exists for known gaps and the room's chatter is not part of that question.
 
 A run that stops on either one writes no file, prints one `::notice::` line carrying the numbers, and
 **ends green**. Refusing to write is the decision these thresholds exist to make, and reporting it as

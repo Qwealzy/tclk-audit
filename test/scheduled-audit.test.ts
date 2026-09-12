@@ -400,18 +400,93 @@ describe('the scheduled run, offline', () => {
     expect(run.status, run.stderr).toBe(0);
     expect(run.outcome).toBe('ceiling-stop');
     expect(existsSync(run.outDir)).toBe(false);
-    expect(run.stdout).toContain('% of the export could be judged, under the 10% floor.');
+    expect(run.stdout).toContain('% of the marked lines could be judged, under the 10% floor.');
     expect(run.stdout).toContain('10000 of 10100 lines are frames the installed decoder does not read');
   }, 120_000);
 
   it('does not round a share up to the floor it fell under', () => {
-    // 1,200 judged lines against 10,801 gaps is 9.9992%, which rounds to 10 at
-    // three digits. Printed beside a 10% floor it would argue with itself.
-    const gaps = Array.from({ length: 10_801 }, (_, n) => gapLine(520_000 + n));
+    // The fixture's 1,186 marked lines against 10,675 gaps is 9.9992%, which
+    // rounds to 10 at three digits. Printed beside a 10% floor it would argue
+    // with itself. The share is taken over marked lines, so the fixture's 14
+    // lines of chatter are not in the count this is tuned against.
+    const gaps = Array.from({ length: 10_675 }, (_, n) => gapLine(520_000 + n));
     const run = runScheduledAudit('rounding', [...fixture, ...gaps]);
     expect(run.status, run.stderr).toBe(0);
     expect(run.outcome).toBe('ceiling-stop');
-    expect(run.stdout).toContain('only 9.99% of the export could be judged, under the 10% floor.');
+    expect(run.stdout).toContain('only 9.99% of the marked lines could be judged, under the 10% floor.');
+  }, 120_000);
+
+  // A line carrying the next version of the prefix. STATED, SPEC.md section 3:
+  // "the prefix is the version; incompatible revisions change it". So this is
+  // what an ecosystem that moved on looks like to a decoder that did not.
+  function driftLine(seq: number): string {
+    const from = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
+    const frame = `{"contract":"0x${'cd'.repeat(32)}","from":"${from}","nonce":"0123456789abcdef","type":"offer"}`;
+    return JSON.stringify({ seq, ts: '2026-09-05T16:59:00.000000Z', from, text: 'tclk2 ' + frame });
+  }
+
+  // The same volume with no tclk marking at all. The room talking to itself.
+  function chatterLine(seq: number): string {
+    const from = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
+    return JSON.stringify({
+      seq,
+      ts: '2026-09-05T16:59:00.000000Z',
+      from,
+      text: `probe v1 | 0910c2a-tclk-offers.${seq} | null | a measurement that expects no reply`,
+    });
+  }
+
+  it('refuses to write when the ecosystem moves to a prefix this decoder does not read', () => {
+    // The whole reason marked lines stay in the rate. 12,000 lines carrying
+    // `tclk2 ` against the fixture's 1,186 marked lines is 91% unverified, so
+    // the ceiling fires and nothing is written.
+    const drifted = Array.from({ length: 12_000 }, (_, n) => driftLine(530_000 + n));
+    const run = runScheduledAudit('drift', [...fixture, ...drifted]);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.outcome).toBe('ceiling-stop');
+    expect(existsSync(run.outDir)).toBe(false);
+    // 12,000 here plus the 3 the fixture already carried.
+    expect(run.stdout).toContain('12003 marked tclk without the prefix');
+    expect(run.stdout).toContain('unverified rate 91.1% exceeds the 5% ceiling');
+  }, 120_000);
+
+  it('writes when the same volume carries no tclk marking, which is the difference', () => {
+    // The pair to the test above, and the assertion is the difference between
+    // them. Same line count, same run, one bit changed: whether the line says
+    // it is tclk. Marked, the rate counts it and the run stops. Unmarked, it
+    // leaves both sides and the run writes. Counting every non-frame line the
+    // way the marked ones are counted would stop this run too, on a room whose
+    // only fault is that it talks. Counting neither, which is what this tool
+    // did before, would have let the drift above through as a clean 0.6%.
+    const chatter = Array.from({ length: 12_000 }, (_, n) => chatterLine(530_000 + n));
+    const run = runScheduledAudit('chatter', [...fixture, ...chatter]);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.outcome).toBe('written');
+    expect(readFileSync(join(run.outDir, STAMP + '.md'), 'utf8')).toContain(
+      '| Lines that were not frames | 12014 |',
+    );
+  }, 120_000);
+
+  it('does not fire on the handful of prose lines the live board actually carries', () => {
+    // The cost of the category, held to a boundary. PROBED 2026-09-12: 14 of
+    // 17,469 lines on the live board were `[tclk/1:...]` status prose, under a
+    // tenth of a percent. Twenty against the fixture is 1.7%, still inside the
+    // 5% ceiling. If this ever fires, the definition is too wide and the near
+    // miss test in shape.test.ts is where it gets narrowed.
+    const prose = Array.from({ length: 20 }, (_, n) =>
+      JSON.stringify({
+        seq: 540_000 + n,
+        ts: '2026-09-05T16:59:00.000000Z',
+        from: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+        text: `[tclk/1:OFFER] Rail: paper | Lock: 0x${n.toString(16)} | Expiry: 3600s | Status: Open`,
+      }),
+    );
+    const run = runScheduledAudit('prose', [...fixture, ...prose]);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.outcome).toBe('written');
+    expect(readFileSync(join(run.outDir, STAMP + '.md'), 'utf8')).toContain(
+      '| Lines marked tclk without the prefix | 23 |',
+    );
   }, 120_000);
 
   it('still writes when known gaps are the share the live ring shows', () => {

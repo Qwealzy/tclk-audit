@@ -371,7 +371,8 @@ if (scan.frames.length === 0) {
     `no usable frames in ${records.length} records: ` +
       `${decoderRejected} rejected by the decoder, ` +
       `${shapeRefused} refused by the shape check, ${signatureRefused} left out by the signature check, ` +
-      `${scan.knownGaps.length} known decoder gaps, ${scan.nonFrameCount} not tclk lines`,
+      `${scan.knownGaps.length} known decoder gaps, ${scan.nearMissCount} lines marked tclk without the prefix, ` +
+        `${scan.nonFrameCount} not tclk lines`,
   );
 }
 
@@ -400,8 +401,21 @@ if (scan.frames.length === 0) {
 // format read as 0%. The torn last line STATED above is one of these, so a
 // healthy export carries at most one.
 const totalLines =
-  scan.frames.length + scan.rejections.length + scan.knownGaps.length + scan.nonFrameCount + unparsedLines;
-const judgedLines = totalLines - scan.knownGaps.length;
+  scan.frames.length +
+  scan.rejections.length +
+  scan.knownGaps.length +
+  scan.nearMissCount +
+  scan.nonFrameCount +
+  unparsedLines;
+// INFERRED, this package's own decision: a line that carried no tclk marking at
+// all leaves both sides of the rate. It never claimed to be a frame, so it says
+// nothing about the decoder, and a room's ordinary conversation would otherwise
+// set the rate on its own. A line that did claim to be tclk without the `tclk1 `
+// prefix stays in. See `isNearMissTclkLine` for why that half matters: the
+// prefix is the version, so the next one looks exactly like this from here, and
+// dropping those would let a whole version shift read as a clean room.
+const markedLines = totalLines - scan.nonFrameCount;
+const judgedLines = markedLines - scan.knownGaps.length;
 const unverified = judgedLines - scan.frames.length;
 // Nothing to judge means nothing was verified either, so this stops. The check
 // above catches that first today. This side stays closed if it ever moves.
@@ -428,12 +442,17 @@ const unverifiedRate = judgedLines === 0 ? 1 : unverified / judgedLines;
  * cannot read, and at that point the installed decoder cannot audit the room at
  * all, which is the same thing the ceiling says. The forged case sits at 99%.
  */
-const judgedShare = totalLines === 0 ? 0 : judgedLines / totalLines;
+// Measured over the marked lines, not the whole export. This floor exists for
+// one thing, known gaps swallowing the denominator, and the room's chatter is
+// not part of that question. Taking it over `totalLines` instead would stop a
+// run on any room that talks more than it trades, which is a different check
+// nobody asked for.
+const judgedShare = markedLines === 0 ? 0 : judgedLines / markedLines;
 
-if (totalLines > 0 && judgedShare < MIN_JUDGED_SHARE) {
+if (markedLines > 0 && judgedShare < MIN_JUDGED_SHARE) {
   stop(
-    `only ${percentBelow(judgedShare)}% of the export could be judged, under the ` +
-      `${percent(MIN_JUDGED_SHARE)}% floor. ${scan.knownGaps.length} of ${totalLines} lines are frames ` +
+    `only ${percentBelow(judgedShare)}% of the marked lines could be judged, under the ` +
+      `${percent(MIN_JUDGED_SHARE)}% floor. ${scan.knownGaps.length} of ${markedLines} lines are frames ` +
       `the installed decoder does not read, @flop-labs/tclk ${installedDecoderVersion()}, and those are ` +
       `counted on neither side of the rejection rate. That leaves ${judgedLines} lines judged, ` +
       `${scan.frames.length} of them verified. A file from that would describe a sliver of the room, so ` +
@@ -462,7 +481,8 @@ if (unverifiedRate > REJECTION_RATE_CEILING) {
       `${unverified} of ${judgedLines} lines in the export are not a frame this run would apply: ` +
       `${decoderRejected} rejected by the installed decoder, @flop-labs/tclk ` +
       `${installedDecoderVersion()}, ${shapeRefused} refused by the shape check, ` +
-      `${signatureRefused} left out by the signature check, ${scan.nonFrameCount} not tclk lines, ` +
+      `${signatureRefused} left out by the signature check, ${scan.nearMissCount} marked tclk without the prefix, ` +
+      `${scan.nonFrameCount} not tclk lines counted on neither side, ` +
       `${unparsedLines} lines that did not parse. ` +
       `${scan.knownGaps.length} known decoder gaps are counted on neither side. ` +
       `No findings file was written.${top === '' ? '' : ` Top reasons: ${top}`}`,
@@ -599,6 +619,7 @@ const lines = [
   `| Rejected by the decoder | ${decoderRejected} |`,
   `| Refused by the shape check after decoding | ${shapeRefused} |`,
   `| Known decoder gaps | ${scan.knownGaps.length} |`,
+  `| Lines marked tclk without the prefix | ${scan.nearMissCount} |`,
   `| Lines that were not frames | ${scan.nonFrameCount} |`,
   '',
   '## Signature policy',

@@ -192,7 +192,18 @@ export interface ScanResult {
    * malformed in some other way. See `KNOWN_DECODER_GAPS`.
    */
   readonly knownGaps: readonly KnownDecoderGap[];
-  /** Messages in the room that were not tclk lines at all. Not an error. */
+  /**
+   * Lines that announce themselves as tclk but do not carry the `tclk1 `
+   * prefix. See `isNearMissTclkLine`. Counted apart from `nonFrameCount` so
+   * the caller can keep them in a rate the way a malformed frame is kept,
+   * rather than dropping them with the room's chatter.
+   */
+  readonly nearMissCount: number;
+  /**
+   * Messages in the room that carried no tclk marking at all. Not an error,
+   * and not this tool's business. A line here never announced itself as a
+   * frame, so nothing about it measures the decoder.
+   */
   readonly nonFrameCount: number;
 }
 
@@ -278,6 +289,41 @@ export function parseServerTimestamp(ts: string): number {
   return Date.parse(ts);
 }
 
+/**
+ * A line that announces itself as tclk without carrying the `tclk1 ` prefix.
+ *
+ * INFERRED, and this package's own decision. The spec defines no such
+ * category. STATED in 0.1.0's SPEC.md section 3: a frame is the six characters
+ * `tclk1 ` and one canonical JSON object, and "the prefix is the version;
+ * incompatible revisions change it". So a `tclk2` line is exactly what the
+ * next version looks like from here, and `isTclkLine` returns false for it.
+ *
+ * That matters for the rejection rate. A line this tool drops as chatter
+ * leaves both sides of the rate, so an ecosystem that moved to a new prefix
+ * would read as a clean room while this decoder read nothing in it. Keeping
+ * these lines in the rate is what makes a version shift show up as a refusal
+ * to write rather than as a healthy number.
+ *
+ * Two shapes, both PROBED on the live board 2026-09-12. A versioned prefix
+ * this decoder does not take, and the bracket dialect that spells the
+ * `TCLK_VERSION` string `tclk/1` in a human-readable status line.
+ *
+ * The cost of the category is a false positive: prose that names tclk at the
+ * start of a line is counted as unverified forever. On 2026-09-12 that was 14
+ * lines in 17,469, under a tenth of a percent. A fleet emitting these in bulk
+ * would push the rate up on text that never tried to be a frame. The second
+ * golden fixture holds that boundary.
+ *
+ * `isTclkLine` is the decoder's own and is not touched. This is a layer above
+ * it, used only to sort what the decoder already declined to look at.
+ */
+export function isNearMissTclkLine(text: string): boolean {
+  // A line the decoder takes is not a near miss. Excluding it here keeps the
+  // predicate true to its name on its own, rather than only inside the one
+  // branch below where `isTclkLine` has already returned false.
+  return !isTclkLine(text) && /^(?:tclk\d+[\s:]|\[tclk\/\d)/i.test(text);
+}
+
 export function scanRecords(
   records: Iterable<RoomRecord>,
   options: ScanOptions = {},
@@ -285,13 +331,16 @@ export function scanRecords(
   const frames: FrameRecord[] = [];
   const rejections: FrameRejection[] = [];
   const knownGaps: KnownDecoderGap[] = [];
+  let nearMissCount = 0;
   let nonFrameCount = 0;
 
   for (const record of records) {
     // Untrusted content: a room message is a string a stranger typed. It is
-    // only ever passed to the decoder, never interpreted here.
+    // only ever passed to the decoder, never interpreted here. The near-miss
+    // test reads the start of the line and nothing else.
     if (typeof record.text !== 'string' || !isTclkLine(record.text)) {
-      nonFrameCount += 1;
+      if (typeof record.text === 'string' && isNearMissTclkLine(record.text)) nearMissCount += 1;
+      else nonFrameCount += 1;
       continue;
     }
 
@@ -353,7 +402,7 @@ export function scanRecords(
     });
   }
 
-  return { frames, rejections, knownGaps, nonFrameCount };
+  return { frames, rejections, knownGaps, nearMissCount, nonFrameCount };
 }
 
 /**

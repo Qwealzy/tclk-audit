@@ -56,7 +56,8 @@ The room is a ring, so one run sees only what is retained, about 0.2 hours here,
 | Rejected by the decoder | 10 |
 | Refused by the shape check after decoding | 1 |
 | Known decoder gaps | 0 |
-| Lines that were not frames | 17 |
+| Lines marked tclk without the prefix | 3 |
+| Lines that were not frames | 14 |
 
 ## Signature policy
 
