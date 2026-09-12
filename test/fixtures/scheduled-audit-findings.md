@@ -1,10 +1,9 @@
 # tclk-offers structural audit, 2026-09-11T00:00:00.000Z
 
-> [!CAUTION]
-> **Known broken and under repair. Do not rely on this file.**
->
-> The tool that wrote this file has no open defect on this list. All three were fixed before this
-> file was written.
+> [!NOTE]
+> **Four defects were found and fixed on 2026-09-11, UTC.** None is open. Each is listed with what
+> it left behind, since that decides how the counts below read. A findings file whose banner does
+> not carry this list was written by a tool with one of them still open.
 >
 > - **Fixed on 2026-09-11: later refusals are no longer all chained to the first.** Chains are kept
 >   per contract. In `tclk-offers`, a refusal the machine gives for any reason other than status is
@@ -13,16 +12,20 @@
 >   reports. A frame that arrives after the status has moved past it, a late copy for example, can
 >   be chained to an unrelated earlier refusal. Either can be counted below as a downstream
 >   consequence.
-> - **Fixed on 2026-09-12: only a frame whose signature verifies moves a contract.** The tclk spec
+> - **Fixed on 2026-09-11: only a frame whose signature verifies moves a contract.** The tclk spec
 >   says only a verified frame is a commitment (SPEC.md, section 2). A frame whose record is
 >   unsigned, whose signature does not verify, whose `from` names another key, or whose signature
 >   this tool could not check is left out, in `tclk-offers` and in deal rooms alike. Signature policy
 >   below counts each kind. One limit remains. An unsigned frame is left out even when its sender
->   is honest, since the spec calls it data, not a commitment. A file written before 2026-09-12
->   counted frames this one leaves out, so counts across that date do not compare.
+>   is honest, since the spec calls it data, not a commitment. A file whose banner does not list
+>   this fix counted frames this one leaves out, so the two do not compare.
 > - **Fixed on 2026-09-11: a stranger's words no longer reach this file through a decoder refusal.**
 >   Each refusal below is rebuilt from the decoder's fixed text. Every part a stranger chose, such
 >   as a field name, a value or a frame type, appears only as its byte length and SHA-256.
+> - **Fixed on 2026-09-11: one frame can no longer stop the run.** A lock whose type is `["lock"]`
+>   decodes as a lock, and the state machine returns nothing for it. The run used to throw on that
+>   and write no file. Each decoded frame is now checked against the types tclk declares, and one
+>   that fails is counted under Shape check rejections.
 
 **Unsigned.** Produced by a scheduled run with no key present. These findings carry no
 signature and are not attestations. They are the output of a program anyone can run against

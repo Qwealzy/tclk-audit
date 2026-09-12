@@ -1,55 +1,5 @@
 # tclk-audit
 
-> [!CAUTION]
-> **Known broken and under repair. Do not rely on this tool or its findings.**
->
-> No defect listed below is still open. All three are fixed, each with a limit noted. Banner added
-> 2026-09-11 and revised on 2026-09-11 and 2026-09-12, as the tool read deal rooms, chained refusals
-> per contract, rebuilt decoder refusals and began to act on signatures.
->
-> - **Fixed on 2026-09-11 (9f367e8, e458750): later refusals are no longer all chained to the
->   first.** Until then, once one transition was refused, the audit counted every later refusal in
->   the same offer's thread as a downstream consequence of it, whatever its own cause. Now a refusal
->   the machine gives for any reason other than status is always its own anomaly, and chains are kept
->   per contract. Two limits remain, described under "Two things measured, not assumed" below.
-> - **Fixed on 2026-09-12 (2f50c03): only a frame whose signature verifies moves a contract.** The
->   tclk spec says only a verified frame is a commitment (SPEC.md, section 2). The tool applies a
->   frame only when its record's signature verifies and the frame's `from` is the key that signed
->   it, in `tclk-offers` and in deal rooms alike. Every other decoded frame is left out and counted
->   by kind. A `from` that names another key breaks a MUST in the spec. A signature that does not
->   verify is counted on its own, since many at once more likely mean a fault in this tool than many
->   faulty senders. An unsigned record is "not re-verifiable", which is not "invalid". A signature
->   the tool could not check is its own limit and is never charged to the sender. Two limits. An
->   unsigned frame is left out even when its sender is honest. And a file written before this change
->   counted frames a later one leaves out, so counts across that date do not compare.
-> - **Fixed on 2026-09-11 (8f7341b): a stranger's words no longer pass through a decoder refusal.**
->   The decoder repeats text a stranger chose in its refusals, such as an unknown field name, a
->   malformed value or an unknown frame type. This tool no longer passes that message on. It
->   matches the refusal against every template the 0.1.0 decoder can produce and builds its own
->   message from the fixed text. Each part a stranger chose appears only as `<N bytes, sha256:HEX>`,
->   however harmless it looks, and a refusal in no known form is hidden whole. This drops an earlier
->   rule, that the decoder's own words are never reworded. The findings file, the CI log, the model
->   prompt and room messages all carry the rebuilt text. Three strings a stranger chose can still
->   reach a finding. A rejected frame's sender, a did:key or a name the live service limits to
->   lowercase letters, digits, `_` and `-`, can reach a detail line. So can a rail name the state
->   machine repeats in "rail X was not offered". From a detail line, either can reach the model prompt
->   or a room message. The third is the subject of a finding about an accept whose offer is missing.
->   It is that accept's `ref`, which the decoder limits to `0x` and 64 hex digits, and it reaches the
->   model prompt. The advice guard checks none of them.
->
-> Also fixed on 2026-09-12 (fcc4d1a), and never listed here before. One frame that a stranger could
-> post, such as a lock whose type is `["lock"]`, stopped a run with a TypeError before it wrote
-> anything. It was found on 2026-09-11.
->
-> The tool cannot currently produce a findings file at all. On 2026-09-11, 64.6% of live tclk lines
-> failed the decoder, far above the 5% rejection ceiling. Most of those were accept frames missing
-> the required `contract` field, tracked upstream in
-> [flop-labs/tclk#142](https://github.com/flop-labs/tclk/issues/142) and
-> [flop-labs/tclk#147](https://github.com/flop-labs/tclk/issues/147).
->
-> The numbers and claims below were written before these defects were known. Treat them as
-> unverified.
-
 Follows the `tclk-offers` room on [technocore.chat](https://technocore.chat), reconstructs each
 contract's state machine from its signed frames, and reports what the transcript establishes.
 
@@ -62,6 +12,51 @@ This project is unofficial. It is not affiliated with, endorsed by, or connected
 operators of technocore.chat. It is an independent tool built against the published `tclk/1`
 specification and the technocore.chat protocol. The protocols, the service and the names belong to
 their authors. This tool does not speak for them.
+
+---
+
+## Defects found and fixed
+
+Four were found on 2026-09-11 and all four were fixed the same day. What each fix left behind is
+listed with it. Dates here are UTC, the clock the findings files stamp. Numbers further down were
+taken on different dates, and some of them predate these fixes. The 2026-09-05 findings file carries
+its own older list, from before any of this.
+
+- **Later refusals are no longer all chained to the first** (9f367e8, e458750, 2026-09-11). Until
+  then, once one transition was refused, the audit counted every later refusal in the same offer's
+  thread as a downstream consequence of it, whatever its own cause. Now a refusal the machine gives
+  for any reason other than status is always its own anomaly, and chains are kept per contract. Two
+  limits remain, described under "Two things measured, not assumed" below.
+- **Only a frame whose signature verifies moves a contract** (2f50c03, 2026-09-11). The tclk spec
+  says only a verified frame is a commitment (SPEC.md, section 2). The tool applies a frame only
+  when its record's signature verifies and the frame's `from` is the key that signed it, in
+  `tclk-offers` and in deal rooms alike. Every other decoded frame is left out and counted by kind.
+  A `from` that names another key breaks a MUST in the spec. A signature that does not verify is
+  counted on its own, since many at once more likely mean a fault in this tool than many faulty
+  senders. An unsigned record is "not re-verifiable", which is not "invalid". A signature the tool
+  could not check is its own limit and is never charged to the sender. One limit remains. An unsigned
+  frame is left out even when its sender is honest. A findings file whose banner does not list this
+  fix counted frames a later one leaves out, so the two do not compare.
+- **A stranger's words no longer pass through a decoder refusal** (8f7341b, 2026-09-11). The decoder
+  repeats text a stranger chose in its refusals, such as an unknown field name, a malformed value or
+  an unknown frame type. This tool no longer passes that message on. It matches the refusal against
+  every template the 0.1.0 decoder can produce and builds its own message from the fixed text. Each
+  part a stranger chose appears only as `<N bytes, sha256:HEX>`, however harmless it looks, and a
+  refusal in no known form is hidden whole. This drops an earlier rule, that the decoder's own words
+  are never reworded. The findings file, the CI log, the model prompt and room messages all carry the
+  rebuilt text. Three strings a stranger chose can still reach a finding. A rejected frame's sender,
+  a did:key or a name the live service limits to lowercase letters, digits, `_` and `-`, can reach a
+  detail line. So can a rail name the state machine repeats in "rail X was not offered". From a
+  detail line, either can reach the model prompt or a room message. The third is the subject of a
+  finding about an accept whose offer is missing. It is that accept's `ref`, which the decoder limits
+  to `0x` and 64 hex digits, and it reaches the model prompt. The advice guard checks none of them.
+- **One frame can no longer stop a run** (fcc4d1a, 2026-09-11). A lock whose type is `["lock"]`
+  decodes as a lock, because the 0.1.0 decoder looks a type up by its string form. The state machine
+  returns nothing for such a frame, and the audit used to throw a TypeError on it. One message of
+  that shape, which anyone could post, was enough to stop a run before it wrote anything. PROBED
+  locally over 459 crafted vectors; no workflow run ever met one, since every run so far stopped at
+  the rejection ceiling first. Each decoded frame is now checked against the types tclk declares.
+  This defect was never listed here while it was open.
 
 ---
 
@@ -124,6 +119,19 @@ This package installs the published `@flop-labs/tclk` 0.1.0. The only findings f
 repository is [`findings/20260905T180055Z.md`](findings/20260905T180055Z.md), from 2026-09-05. Every
 workflow run since 2026-09-08 used 0.1.0 and stopped at the rejection ceiling, so there is no newer
 audit from the installed decoder.
+
+**Expect that to continue for now.** MEASURED on 2026-09-12 by a manual CI run: a 65.1% decode
+rejection rate, 5,597 of 8,596 tclk lines. The ceiling is 5%. Of those refusals 4,732 were accept
+frames missing the required `contract` field, the symptom tracked upstream in
+[flop-labs/tclk#142](https://github.com/flop-labs/tclk/issues/142), a field report on authenticated
+accepts missing it, and [flop-labs/tclk#147](https://github.com/flop-labs/tclk/issues/147), which
+measures how much of the board it covers. Both are open. INFERRED from that: the traffic has moved
+past the installed 0.1.0 decoder.
+
+A run in that state writes no file, prints one `::error::` line carrying the rate, the decoder
+version and the top reasons, and exits non-zero. So a red daily run is the expected outcome while
+the gap lasts. The ceiling is deliberate. It is there so a daily file of meaningless counts never
+accumulates, and a missing file for a day stays visible as a gap.
 
 ---
 
@@ -331,11 +339,11 @@ The ledger is gitignored. It records what your machine ran and when.
 
 A GitHub Actions workflow exports the retained ring, runs the structural checks, and writes a
 findings file. It was scheduled once a day from 2026-09-06 and ran three times, on 2026-09-08,
-2026-09-09 and 2026-09-10. The schedule has been off since 2026-09-11. The step that commits the
-findings file is switched off with `if: false`. The workflow now runs only when started by hand, and
-it never commits what it finds. Every run so far, three scheduled and one manual, stopped at the
-rejection ceiling described below. No findings file has ever come from the workflow. The one in
-`findings/` came from a local run on 2026-09-05, before the workflow existed.
+2026-09-09 and 2026-09-10. The schedule was off from 2026-09-11 while two defects stood, and it is
+on again from 2026-09-12, along with the step that commits the file. Every run so far, three
+scheduled and two manual, stopped at the rejection ceiling described above. No findings file has
+ever come from the workflow. The one in `findings/` came from a local run on 2026-09-05, before the
+workflow existed.
 
 No key is present in CI. A `did:key` is single-copy and cannot be revoked. There is no issuer, no
 registry, and no rotation. A key in Actions secrets would sign on someone's behalf inside an
@@ -365,7 +373,7 @@ cause.
 
 ```bash
 npm install
-npm test          # 254 tests, against a fixture of real frames and signed synthetic contracts
+npm test          # 262 tests, against a fixture of real frames and signed synthetic contracts
 npm run demo      # the three-way comparison
 npm run build
 node examples/live-run.mjs
